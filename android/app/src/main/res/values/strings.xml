@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">LevelUp Test</string>
+    <string name="a11y_description">Optional screen-time test: detects only the foreground app package and displays a gate on the selected app. It does not read messages or screen content. Turn it off in Android Settings at any time.</string>
+</resources>

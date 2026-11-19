@@ -1,0 +1,23 @@
+name: levelup_test
+description: LevelUp proof of concept for a user-controlled Android screen-time gate.
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.11.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  camera: ^0.12.2
+  camera_android: ^0.10.13
+  google_mlkit_pose_detection: ^1.0.3
+  material_ui: ^1.11.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
