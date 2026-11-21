@@ -28,15 +28,25 @@ class IneligibleWorkoutContextException extends AccessEngineException {
   }) : super(code: 'INELIGIBLE_CONTEXT');
 }
 
-/// Thrown when a workout result is incomplete or has 0 verified repetitions.
+/// Thrown when a workout result is incomplete or has not reached target repetitions.
 class IncompleteWorkoutResultException extends AccessEngineException {
   final int completedReps;
+  final int? targetReps;
 
   const IncompleteWorkoutResultException(
     this.completedReps, {
+    this.targetReps,
     super.message = 'Cannot grant access for an incomplete workout result.',
     super.cause,
   }) : super(code: 'INCOMPLETE_RESULT');
+
+  @override
+  String toString() {
+    if (targetReps != null) {
+      return 'IncompleteWorkoutResultException[INCOMPLETE_RESULT]: completed $completedReps of $targetReps required repetitions.';
+    }
+    return super.toString();
+  }
 }
 
 /// Thrown when an access grant is attempted for an unsupported Android target package.

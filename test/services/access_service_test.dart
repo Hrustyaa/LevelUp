@@ -169,16 +169,16 @@ void main() {
         accessDurationSeconds: 0,
       );
 
-      expect(
+      await expectLater(
         () => accessService.grantAccessForCompletedWorkout(freeWorkoutResult),
         throwsA(isA<IneligibleWorkoutContextException>()),
       );
       expect(fakeBridge.callLog, isNot(contains('grantAccess')));
     });
 
-    test('3. rejects incomplete result with IncompleteWorkoutResultException', () async {
+    test('3a. rejects 0 of 5 reps with IncompleteWorkoutResultException', () async {
       final workoutResult = WorkoutResult(
-        sessionId: 'session_incomplete',
+        sessionId: 'session_0_reps',
         requestId: 'req_1',
         challengeId: 'squats_unlock_5',
         challengeContext: ChallengeType.unlockChallenge,
@@ -193,12 +193,89 @@ void main() {
 
       await expectLater(
         () => accessService.grantAccessForCompletedWorkout(workoutResult),
-        throwsA(isA<IncompleteWorkoutResultException>()),
+        throwsA(
+          isA<IncompleteWorkoutResultException>()
+              .having((e) => e.completedReps, 'completedReps', equals(0))
+              .having((e) => e.targetReps, 'targetReps', equals(5)),
+        ),
       );
       expect(fakeBridge.callLog, isNot(contains('grantAccess')));
     });
 
-    test('4. rejects cancelled or failed workout results (not eligible for access)', () {
+    test('3b. rejects 1 of 5 reps with IncompleteWorkoutResultException', () async {
+      final workoutResult = WorkoutResult(
+        sessionId: 'session_1_reps',
+        requestId: 'req_1',
+        challengeId: 'squats_unlock_5',
+        challengeContext: ChallengeType.unlockChallenge,
+        exerciseType: ExerciseType.squats,
+        targetPackage: ChannelConstants.targetYouTube,
+        completedRepetitions: 1,
+        duration: const Duration(seconds: 15),
+        completedAt: fixedTime,
+        eligibleForAccess: true,
+        accessDurationSeconds: 300,
+      );
+
+      await expectLater(
+        () => accessService.grantAccessForCompletedWorkout(workoutResult),
+        throwsA(
+          isA<IncompleteWorkoutResultException>()
+              .having((e) => e.completedReps, 'completedReps', equals(1))
+              .having((e) => e.targetReps, 'targetReps', equals(5)),
+        ),
+      );
+      expect(fakeBridge.callLog, isNot(contains('grantAccess')));
+    });
+
+    test('3c. rejects 4 of 5 reps with IncompleteWorkoutResultException', () async {
+      final workoutResult = WorkoutResult(
+        sessionId: 'session_4_reps',
+        requestId: 'req_1',
+        challengeId: 'squats_unlock_5',
+        challengeContext: ChallengeType.unlockChallenge,
+        exerciseType: ExerciseType.squats,
+        targetPackage: ChannelConstants.targetYouTube,
+        completedRepetitions: 4,
+        duration: const Duration(seconds: 35),
+        completedAt: fixedTime,
+        eligibleForAccess: true,
+        accessDurationSeconds: 300,
+      );
+
+      await expectLater(
+        () => accessService.grantAccessForCompletedWorkout(workoutResult),
+        throwsA(
+          isA<IncompleteWorkoutResultException>()
+              .having((e) => e.completedReps, 'completedReps', equals(4))
+              .having((e) => e.targetReps, 'targetReps', equals(5)),
+        ),
+      );
+      expect(fakeBridge.callLog, isNot(contains('grantAccess')));
+    });
+
+    test('3d. accepts 5 of 5 verified reps and grants access', () async {
+      final workoutResult = WorkoutResult(
+        sessionId: 'session_5_reps',
+        requestId: 'req_1',
+        challengeId: 'squats_unlock_5',
+        challengeContext: ChallengeType.unlockChallenge,
+        exerciseType: ExerciseType.squats,
+        targetPackage: ChannelConstants.targetYouTube,
+        completedRepetitions: 5,
+        duration: const Duration(seconds: 45),
+        completedAt: fixedTime,
+        eligibleForAccess: true,
+        accessDurationSeconds: 300,
+      );
+
+      final grantResult = await accessService.grantAccessForCompletedWorkout(workoutResult);
+      expect(grantResult.isSuccessful, isTrue);
+      expect(grantResult.status, equals(AccessGrantStatus.granted));
+      expect(fakeBridge.callLog, contains('grantAccess'));
+    });
+
+    test('4. rejects cancelled or failed workout results (not eligible for access)', () async {
       // Results without eligibleForAccess flag set to true are rejected
       final cancelledWorkoutResult = WorkoutResult(
         sessionId: 'session_cancelled',
@@ -214,10 +291,11 @@ void main() {
         accessDurationSeconds: 0,
       );
 
-      expect(
+      await expectLater(
         () => accessService.grantAccessForCompletedWorkout(cancelledWorkoutResult),
         throwsA(isA<IneligibleWorkoutContextException>()),
       );
+      expect(fakeBridge.callLog, isNot(contains('grantAccess')));
     });
 
     test('5. rejects unsupported target package with UnsupportedAccessTargetException', () async {
@@ -255,7 +333,7 @@ void main() {
 
       final workoutResult = createUnlockResult();
 
-      expect(
+      await expectLater(
         () => accessService.grantAccessForCompletedWorkout(workoutResult),
         throwsA(isA<MissingAccessibilityPermissionException>()),
       );
@@ -272,7 +350,7 @@ void main() {
 
       final workoutResult = createUnlockResult();
 
-      expect(
+      await expectLater(
         () => accessService.grantAccessForCompletedWorkout(workoutResult),
         throwsA(isA<FocusDisabledException>()),
       );
@@ -290,7 +368,7 @@ void main() {
 
       final workoutResult = createUnlockResult(targetPackage: ChannelConstants.targetYouTube);
 
-      expect(
+      await expectLater(
         () => accessService.grantAccessForCompletedWorkout(workoutResult),
         throwsA(
           isA<TargetPackageMismatchException>()
@@ -299,6 +377,98 @@ void main() {
         ),
       );
       expect(fakeBridge.callLog, isNot(contains('grantAccess')));
+    });
+
+    test('8b. rejects unknown challengeId with IneligibleWorkoutContextException', () async {
+      final workoutResult = WorkoutResult(
+        sessionId: 'session_unknown',
+        requestId: 'req_1',
+        challengeId: 'non_existent_challenge',
+        challengeContext: ChallengeType.unlockChallenge,
+        exerciseType: ExerciseType.squats,
+        targetPackage: ChannelConstants.targetYouTube,
+        completedRepetitions: 5,
+        duration: const Duration(seconds: 45),
+        completedAt: fixedTime,
+        eligibleForAccess: true,
+        accessDurationSeconds: 300,
+      );
+
+      await expectLater(
+        () => accessService.grantAccessForCompletedWorkout(workoutResult),
+        throwsA(
+          isA<IneligibleWorkoutContextException>()
+              .having((e) => e.message, 'message', contains('Unknown challenge ID')),
+        ),
+      );
+      expect(fakeBridge.callLog, isNot(contains('grantAccess')));
+    });
+
+    test('8c. rejects mismatched challenge definition (0 access duration definition)', () async {
+      final workoutResult = WorkoutResult(
+        sessionId: 'session_mismatched',
+        requestId: 'req_1',
+        challengeId: 'squats_free_5', // Free workout definition does not grant access!
+        challengeContext: ChallengeType.unlockChallenge,
+        exerciseType: ExerciseType.squats,
+        targetPackage: ChannelConstants.targetYouTube,
+        completedRepetitions: 5,
+        duration: const Duration(seconds: 45),
+        completedAt: fixedTime,
+        eligibleForAccess: true,
+        accessDurationSeconds: 300,
+      );
+
+      await expectLater(
+        () => accessService.grantAccessForCompletedWorkout(workoutResult),
+        throwsA(
+          isA<IneligibleWorkoutContextException>()
+              .having((e) => e.message, 'message', contains('does not grant access')),
+        ),
+      );
+      expect(fakeBridge.callLog, isNot(contains('grantAccess')));
+    });
+
+    test('8d. rejects direct requestAccess with freeWorkout context', () async {
+      expect(
+        () => AccessGrantRequest(
+          sessionId: 'session_bypass',
+          challengeId: 'squats_free_5',
+          targetPackage: ChannelConstants.targetYouTube,
+          durationMinutes: 5,
+          challengeContext: ChallengeType.freeWorkout, // Prohibited!
+          completedAt: fixedTime,
+        ),
+        throwsA(isA<IneligibleWorkoutContextException>()),
+      );
+    });
+
+    test('8e. rejects direct requestAccess with unsupported target package', () async {
+      expect(
+        () => AccessGrantRequest(
+          sessionId: 'session_invalid_target',
+          challengeId: 'squats_unlock_5',
+          targetPackage: 'com.unsupported.target',
+          durationMinutes: 5,
+          challengeContext: ChallengeType.unlockChallenge,
+          completedAt: fixedTime,
+        ),
+        throwsA(isA<UnsupportedAccessTargetException>()),
+      );
+    });
+
+    test('8f. rejects direct requestAccess with invalid duration', () async {
+      expect(
+        () => AccessGrantRequest(
+          sessionId: 'session_invalid_dur',
+          challengeId: 'squats_unlock_5',
+          targetPackage: ChannelConstants.targetYouTube,
+          durationMinutes: 0, // Must be 1..15
+          challengeContext: ChallengeType.unlockChallenge,
+          completedAt: fixedTime,
+        ),
+        throwsA(isA<InvalidAccessDurationException>()),
+      );
     });
   });
 
@@ -365,7 +535,7 @@ void main() {
 
       final workoutResult = createUnlockResult();
 
-      expect(
+      await expectLater(
         () => accessService.grantAccessForCompletedWorkout(workoutResult),
         throwsA(
           isA<AccessEnginePlatformException>()

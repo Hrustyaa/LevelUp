@@ -49,7 +49,7 @@ class WorkoutResult {
   /// Biomechanical verification source (e.g. 'camera', 'test').
   final String source;
 
-  const WorkoutResult({
+  WorkoutResult({
     required this.sessionId,
     required this.requestId,
     required this.challengeId,
@@ -70,9 +70,23 @@ class WorkoutResult {
         ),
         assert(
           challengeContext != ChallengeType.unlockChallenge ||
-              (eligibleForAccess && targetPackage != null && targetPackage.length > 0),
+              (eligibleForAccess && targetPackage != null && targetPackage.isNotEmpty),
           'Unlock challenge must have an eligible target package',
-        );
+        ) {
+    // Runtime checks ensuring release builds enforce the same invariants
+    if (challengeContext == ChallengeType.freeWorkout &&
+        (eligibleForAccess || accessDurationSeconds != 0 || targetPackage != null)) {
+      throw ArgumentError(
+        'Free workout must never produce an access grant or have a target package.',
+      );
+    }
+    if (challengeContext == ChallengeType.unlockChallenge &&
+        (!eligibleForAccess || targetPackage == null || targetPackage!.isEmpty)) {
+      throw ArgumentError(
+        'Unlock challenge must have an eligible target package and authorization flag.',
+      );
+    }
+  }
 
   Map<String, dynamic> toMap() {
     return {

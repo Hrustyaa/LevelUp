@@ -2,11 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 
+import '../core/constants/channel_constants.dart';
 import '../core/errors/access_exceptions.dart';
 import '../core/errors/native_bridge_exception.dart';
 import '../models/access_grant_request.dart';
 import '../models/access_grant_result.dart';
 import '../models/access_grant_status.dart';
+import '../models/challenge_type.dart';
 import '../models/native_access_status.dart';
 import '../models/workout_result.dart';
 import 'native_bridge.dart';
@@ -75,6 +77,17 @@ class AccessService implements IAccessService {
 
   @override
   Future<AccessGrantResult> requestAccess(AccessGrantRequest request) async {
+    // 0. Runtime validation of AccessGrantRequest integrity
+    if (request.challengeContext != ChallengeType.unlockChallenge) {
+      throw const IneligibleWorkoutContextException();
+    }
+    if (!ChannelConstants.allowedTargets.contains(request.targetPackage)) {
+      throw UnsupportedAccessTargetException(request.targetPackage);
+    }
+    if (request.durationMinutes < 1 || request.durationMinutes > 15) {
+      throw InvalidAccessDurationException(request.durationMinutes * 60);
+    }
+
     // 1. In-process duplicate suppression: check if already granted
     final existing = _grantedSessions[request.sessionId];
     if (existing != null) {

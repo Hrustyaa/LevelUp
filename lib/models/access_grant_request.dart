@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../core/constants/channel_constants.dart';
 import '../core/errors/access_exceptions.dart';
+import '../features/challenge/data/challenge_catalog.dart';
 import 'challenge_type.dart';
 import 'workout_result.dart';
 
@@ -26,17 +27,33 @@ class AccessGrantRequest {
   /// Completion timestamp of the workout.
   final DateTime completedAt;
 
-  const AccessGrantRequest({
+  AccessGrantRequest({
     required this.sessionId,
     required this.challengeId,
     required this.targetPackage,
     required this.durationMinutes,
     required this.challengeContext,
     required this.completedAt,
-  });
+  }) {
+    if (sessionId.trim().isEmpty) {
+      throw const AccessEngineException(
+        code: 'INVALID_SESSION_ID',
+        message: 'sessionId must not be empty.',
+      );
+    }
+    if (challengeContext != ChallengeType.unlockChallenge) {
+      throw const IneligibleWorkoutContextException();
+    }
+    if (!ChannelConstants.allowedTargets.contains(targetPackage)) {
+      throw UnsupportedAccessTargetException(targetPackage);
+    }
+    if (durationMinutes < 1 || durationMinutes > 15) {
+      throw InvalidAccessDurationException(durationMinutes * 60);
+    }
+  }
 
   /// Factory constructor that builds and validates an [AccessGrantRequest]
-  /// directly from a completed [WorkoutResult].
+  /// directly from an authoritative completed [WorkoutResult].
   ///
   /// Throws [IneligibleWorkoutContextException], [IncompleteWorkoutResultException],
   /// [UnsupportedAccessTargetException], or [InvalidAccessDurationException].
@@ -46,8 +63,35 @@ class AccessGrantRequest {
       throw const IneligibleWorkoutContextException();
     }
 
-    if (result.completedRepetitions <= 0) {
-      throw IncompleteWorkoutResultException(result.completedRepetitions);
+    // Resolve authoritative definition from ChallengeCatalog
+    final definition = ChallengeCatalog.byId[result.challengeId];
+    if (definition == null) {
+      throw IneligibleWorkoutContextException(
+        message: 'Unknown challenge ID: "${result.challengeId}".',
+      );
+    }
+
+    // Verify definition specifies app access
+    if (definition.accessDurationSeconds <= 0) {
+      throw IneligibleWorkoutContextException(
+        message: 'Challenge "${result.challengeId}" does not grant access.',
+      );
+    }
+
+    // Verify exercise type matches the authoritative definition
+    if (result.exerciseType != definition.exerciseType) {
+      throw IneligibleWorkoutContextException(
+        message:
+            'Exercise type "${result.exerciseType.name}" does not match definition "${definition.exerciseType.name}".',
+      );
+    }
+
+    // Strict repetition verification: verified reps must satisfy definition target
+    if (result.completedRepetitions < definition.targetRepetitions) {
+      throw IncompleteWorkoutResultException(
+        result.completedRepetitions,
+        targetReps: definition.targetRepetitions,
+      );
     }
 
     final target = result.targetPackage;

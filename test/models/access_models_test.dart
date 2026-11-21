@@ -68,6 +68,203 @@ void main() {
       );
     });
 
+    test('rejects 0 of 5 repetitions with IncompleteWorkoutResultException', () {
+      final now = DateTime(2026, 11, 21, 17, 30);
+      final workoutResult = WorkoutResult(
+        sessionId: 's0',
+        requestId: 'r0',
+        challengeId: 'squats_unlock_5',
+        challengeContext: ChallengeType.unlockChallenge,
+        exerciseType: ExerciseType.squats,
+        targetPackage: ChannelConstants.targetYouTube,
+        completedRepetitions: 0,
+        duration: const Duration(seconds: 10),
+        completedAt: now,
+        eligibleForAccess: true,
+        accessDurationSeconds: 300,
+      );
+
+      expect(
+        () => AccessGrantRequest.fromWorkoutResult(workoutResult),
+        throwsA(
+          isA<IncompleteWorkoutResultException>()
+              .having((e) => e.completedReps, 'completedReps', equals(0))
+              .having((e) => e.targetReps, 'targetReps', equals(5)),
+        ),
+      );
+    });
+
+    test('rejects 1 of 5 repetitions with IncompleteWorkoutResultException', () {
+      final now = DateTime(2026, 11, 21, 17, 30);
+      final workoutResult = WorkoutResult(
+        sessionId: 's1',
+        requestId: 'r1',
+        challengeId: 'squats_unlock_5',
+        challengeContext: ChallengeType.unlockChallenge,
+        exerciseType: ExerciseType.squats,
+        targetPackage: ChannelConstants.targetYouTube,
+        completedRepetitions: 1,
+        duration: const Duration(seconds: 15),
+        completedAt: now,
+        eligibleForAccess: true,
+        accessDurationSeconds: 300,
+      );
+
+      expect(
+        () => AccessGrantRequest.fromWorkoutResult(workoutResult),
+        throwsA(
+          isA<IncompleteWorkoutResultException>()
+              .having((e) => e.completedReps, 'completedReps', equals(1))
+              .having((e) => e.targetReps, 'targetReps', equals(5)),
+        ),
+      );
+    });
+
+    test('rejects 4 of 5 repetitions with IncompleteWorkoutResultException', () {
+      final now = DateTime(2026, 11, 21, 17, 30);
+      final workoutResult = WorkoutResult(
+        sessionId: 's4',
+        requestId: 'r4',
+        challengeId: 'squats_unlock_5',
+        challengeContext: ChallengeType.unlockChallenge,
+        exerciseType: ExerciseType.squats,
+        targetPackage: ChannelConstants.targetYouTube,
+        completedRepetitions: 4,
+        duration: const Duration(seconds: 35),
+        completedAt: now,
+        eligibleForAccess: true,
+        accessDurationSeconds: 300,
+      );
+
+      expect(
+        () => AccessGrantRequest.fromWorkoutResult(workoutResult),
+        throwsA(
+          isA<IncompleteWorkoutResultException>()
+              .having((e) => e.completedReps, 'completedReps', equals(4))
+              .having((e) => e.targetReps, 'targetReps', equals(5)),
+        ),
+      );
+    });
+
+    test('rejects unknown challengeId with IneligibleWorkoutContextException', () {
+      final now = DateTime(2026, 11, 21, 17, 30);
+      final workoutResult = WorkoutResult(
+        sessionId: 's_unknown',
+        requestId: 'r_unknown',
+        challengeId: 'unknown_challenge_999',
+        challengeContext: ChallengeType.unlockChallenge,
+        exerciseType: ExerciseType.squats,
+        targetPackage: ChannelConstants.targetYouTube,
+        completedRepetitions: 5,
+        duration: const Duration(seconds: 45),
+        completedAt: now,
+        eligibleForAccess: true,
+        accessDurationSeconds: 300,
+      );
+
+      expect(
+        () => AccessGrantRequest.fromWorkoutResult(workoutResult),
+        throwsA(
+          isA<IneligibleWorkoutContextException>()
+              .having((e) => e.message, 'message', contains('Unknown challenge ID')),
+        ),
+      );
+    });
+
+    test('rejects mismatched challenge definition (0 access duration definition) with IneligibleWorkoutContextException', () {
+      final now = DateTime(2026, 11, 21, 17, 30);
+      final workoutResult = WorkoutResult(
+        sessionId: 's_mismatch',
+        requestId: 'r_mismatch',
+        challengeId: 'squats_free_5', // Free workout definition does not grant access!
+        challengeContext: ChallengeType.unlockChallenge,
+        exerciseType: ExerciseType.squats,
+        targetPackage: ChannelConstants.targetYouTube,
+        completedRepetitions: 5,
+        duration: const Duration(seconds: 45),
+        completedAt: now,
+        eligibleForAccess: true,
+        accessDurationSeconds: 300,
+      );
+
+      expect(
+        () => AccessGrantRequest.fromWorkoutResult(workoutResult),
+        throwsA(
+          isA<IneligibleWorkoutContextException>()
+              .having((e) => e.message, 'message', contains('does not grant access')),
+        ),
+      );
+    });
+
+    test('enforces runtime invariants on direct constructor', () {
+      final now = DateTime(2026, 11, 21);
+
+      // freeWorkout context rejected
+      expect(
+        () => AccessGrantRequest(
+          sessionId: 's1',
+          challengeId: 'c1',
+          targetPackage: ChannelConstants.targetYouTube,
+          durationMinutes: 5,
+          challengeContext: ChallengeType.freeWorkout,
+          completedAt: now,
+        ),
+        throwsA(isA<IneligibleWorkoutContextException>()),
+      );
+
+      // unsupported target package rejected
+      expect(
+        () => AccessGrantRequest(
+          sessionId: 's1',
+          challengeId: 'c1',
+          targetPackage: 'com.malicious.app',
+          durationMinutes: 5,
+          challengeContext: ChallengeType.unlockChallenge,
+          completedAt: now,
+        ),
+        throwsA(isA<UnsupportedAccessTargetException>()),
+      );
+
+      // duration < 1 rejected
+      expect(
+        () => AccessGrantRequest(
+          sessionId: 's1',
+          challengeId: 'c1',
+          targetPackage: ChannelConstants.targetYouTube,
+          durationMinutes: 0,
+          challengeContext: ChallengeType.unlockChallenge,
+          completedAt: now,
+        ),
+        throwsA(isA<InvalidAccessDurationException>()),
+      );
+
+      // duration > 15 rejected
+      expect(
+        () => AccessGrantRequest(
+          sessionId: 's1',
+          challengeId: 'c1',
+          targetPackage: ChannelConstants.targetYouTube,
+          durationMinutes: 16,
+          challengeContext: ChallengeType.unlockChallenge,
+          completedAt: now,
+        ),
+        throwsA(isA<InvalidAccessDurationException>()),
+      );
+
+      // empty sessionId rejected
+      expect(
+        () => AccessGrantRequest(
+          sessionId: '   ',
+          challengeId: 'c1',
+          targetPackage: ChannelConstants.targetYouTube,
+          durationMinutes: 5,
+          challengeContext: ChallengeType.unlockChallenge,
+          completedAt: now,
+        ),
+        throwsA(isA<AccessEngineException>()),
+      );
+    });
+
     test('implements equality and toMap', () {
       final now = DateTime(2026, 11, 21);
       final a = AccessGrantRequest(

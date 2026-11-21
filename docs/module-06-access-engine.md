@@ -43,18 +43,23 @@ When `grantAccessForCompletedWorkout(WorkoutResult)` is called, the following ch
 | Step | Check | Exception on Failure |
 |------|-------|---------------------|
 | 1 | `challengeContext == unlockChallenge && eligibleForAccess` | `IneligibleWorkoutContextException` |
-| 2 | `completedRepetitions > 0` | `IncompleteWorkoutResultException` |
-| 3 | `targetPackage ∈ allowedTargets` | `UnsupportedAccessTargetException` |
-| 4 | `accessDurationSeconds > 0` | `InvalidAccessDurationException` |
-| 5 | Duplicate session suppression (in-memory) | Returns cached `AccessGrantResult` |
-| 6 | Concurrent request guard | `ConcurrentGrantException` |
-| 7 | Native: `isAccessibilityGranted == true` | `MissingAccessibilityPermissionException` |
-| 8 | Native: `isGateEnabled == true` | `FocusDisabledException` |
-| 9 | Native: `targetPackage == request.targetPackage` | `TargetPackageMismatchException` |
-| 10 | Invoke `bridge.grantAccess(minutes: N)` | `AccessEnginePlatformException` |
+| 2 | Resolve authoritative `definition` from `ChallengeCatalog` by `challengeId` | `IneligibleWorkoutContextException` |
+| 3 | Definition specifies access duration > 0 | `IneligibleWorkoutContextException` |
+| 4 | `exerciseType == definition.exerciseType` | `IneligibleWorkoutContextException` |
+| 5 | `completedRepetitions >= definition.targetRepetitions` | `IncompleteWorkoutResultException` |
+| 6 | `targetPackage ∈ allowedTargets` | `UnsupportedAccessTargetException` |
+| 7 | `accessDurationSeconds > 0` | `InvalidAccessDurationException` |
+| 8 | Direct `requestAccess` runtime validation (context, target, duration bounds 1..15) | `IneligibleWorkoutContextException` / `UnsupportedAccessTargetException` / `InvalidAccessDurationException` |
+| 9 | Duplicate session suppression (in-memory) | Returns cached `AccessGrantResult` |
+| 10 | Concurrent request guard | `ConcurrentGrantException` |
+| 11 | Native: `isAccessibilityGranted == true` | `MissingAccessibilityPermissionException` |
+| 12 | Native: `isGateEnabled == true` | `FocusDisabledException` |
+| 13 | Native: `targetPackage == request.targetPackage` | `TargetPackageMismatchException` |
+| 14 | Invoke `bridge.grantAccess(minutes: N)` | `AccessEnginePlatformException` |
 
-Steps 1–4 happen in `AccessGrantRequest.fromWorkoutResult()`.  
-Steps 5–10 happen in `AccessService.requestAccess()`.
+Steps 1–7 happen in `AccessGrantRequest.fromWorkoutResult()`.  
+Step 8 happens in `AccessGrantRequest` constructor and `AccessService.requestAccess()`.  
+Steps 9–14 happen in `AccessService.requestAccess()`.
 
 ## Models
 
@@ -126,61 +131,23 @@ All exceptions extend `AccessEngineException`:
 
 Calling `setTarget(newPackage)` in `MainActivity.kt` writes `0L` to `"unlock_until"`, immediately revoking any active access window. `AccessService` mitigates this by verifying `nativeStatus.targetPackage == request.targetPackage` before invoking `grantAccess`.
 
-### Process restart boundary
+## Explicitly Documented Architectural Limitations
 
-In-memory duplicate suppression (`_grantedSessions`) is lost on app process restart. Without a `sessionId` in native storage, durable idempotency requires Module 07 (local database with unique session constraints).
-
-## Reactive Stream
-
-`grantStream` emits `AccessGrantResult` on each successful grant. UI consumers can listen to display countdown timers or unlock confirmations.
-
-## Integration Points
-
-### With WorkoutSessionManager (Module 05)
-
-```dart
-final result = workoutSessionManager.completeSession();
-if (result.eligibleForAccess) {
-  final grant = await accessService.grantAccessForCompletedWorkout(result);
-  // Show unlock UI
-}
-```
-
-### With FocusService (Module 02)
-
-AccessService queries `INativeBridge.getState()` to verify focus state. It does **not** call `FocusService` directly — both operate on the same native state through `INativeBridge`.
-
-## For the UI Developer
-
-1. **Call `grantAccessForCompletedWorkout(workoutResult)` after workout completion.**
-2. **Handle every typed exception** to show user-appropriate feedback.
-3. **Listen to `grantStream`** for real-time unlock notifications.
-4. **Use `getAccessStatus()`** to check remaining access time.
-5. **Use `resetAccess()`** only for explicit user-initiated access revocation.
-6. **Never call `grantAccess` directly on `NativeBridge`** — always go through `AccessService`.
-
-## Required Future Kotlin Enhancements
-
-1. **Atomic `grantAccess(sessionId, targetPackage, minutes)`** — allows native-level idempotency and target verification.
-2. **Native sessionId persistence** — crash-safe duplicate prevention.
-3. **`getAccessStatus()` with remaining seconds** — eliminates Dart-side clock skew.
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `lib/core/errors/access_exceptions.dart` | Typed exception hierarchy |
-| `lib/models/access_grant_status.dart` | Status enum |
-| `lib/models/access_grant_request.dart` | Request model with factory validation |
-| `lib/models/access_grant_result.dart` | Immutable grant result |
-| `lib/services/access_service.dart` | `IAccessService` + `AccessService` implementation |
-| `test/models/access_models_test.dart` | Model unit tests |
-| `test/services/access_service_test.dart` | Service unit tests (24 tests) |
+1. **Native `grantAccess` API Scope:** `MainActivity.kt`'s `grantAccess` accepts only integer `minutes`. It does not accept `sessionId` or `targetPackage`. Native code grants access globally to whatever target is in SharedPreferences.
+2. **Target Selection TOCTOU Race:** There is an inherent Time-of-Check to Time-of-Use window between Dart verifying `nativeStatus.targetPackage == workoutTarget` via `getState()` and native executing `grantAccess()`. If `setTarget` is called during this window, the newly selected package is granted instead.
+3. **Process Restart Idempotency Boundary:** `_grantedSessions` duplicate suppression is in-memory only. Upon process kill/restart, in-memory history is cleared. Durable session idempotency requires Module 07 (local database with unique session ID constraints) and future Kotlin contract updates.
+4. **Prototype Bypass:** `lib/main.dart` directly invokes `native.invokeMethod('grantAccess')` as an experimental camera prototype. It will be replaced during UI/Core integration.
+5. **Untrusted Client Data Boundary:** A client-side `WorkoutResult` instantiated in Dart is an in-process DTO; the Access Engine validates logical consistency, definition matching, and preconditions, but client-side DTOs cannot provide cryptographic proof of human physical activity.
 
 ## Test Coverage
 
-**24 unit tests** covering:
-- 8 authorization precondition validations
-- 10 native grant invariants and idempotency guarantees
-- 1 reactive stream emission
-- 5 model equality, computation, and serialization tests
+**38 unit tests** in Module 06 covering:
+- Repetition threshold enforcement (0/5, 1/5, 4/5 rejected; 5/5 accepted)
+- Challenge definition lookups and matching from `ChallengeCatalog`
+- Rejection of unknown challenges, mismatched exercise types, and free workouts
+- Direct constructor runtime validation on `AccessGrantRequest`
+- Authorization preconditions (permissions, gate enabled, target match)
+- Concurrency guard (simultaneous in-flight requests)
+- Safe error handling on IPC failures without unsafe retries
+- Reactive `grantStream` event emission
+- Full model equality and serialization verification
