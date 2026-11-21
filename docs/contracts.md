@@ -2,7 +2,7 @@
 
 **Document:** Platform Bridge & Inter-Module Contracts  
 **Status:** Canonical Reference for Developer 1 (Core) and Developer 2 (UI)  
-**Source of Truth:** [README.md](../README.md) · [Module 01 Specification](module-01-native-bridge.md)
+**Source of Truth:** [README.md](../README.md) · [Module 01 Specification](module-01-native-bridge.md) · [Module 02 Specification](module-02-focus-engine.md) · [Module 03 Specification](module-03-challenge-engine.md)
 
 ---
 
