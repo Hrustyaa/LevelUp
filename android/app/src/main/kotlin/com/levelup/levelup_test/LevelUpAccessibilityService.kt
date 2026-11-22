@@ -5,6 +5,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
@@ -24,7 +25,7 @@ import android.widget.TextView
 /**
  * LevelUp v3: an opt-in, best-effort app gate for Android.
  *
- * Key change from v2: the gate is LATCHED. When a blocked target is detected,
+ * Key design invariant: the gate is LATCHED. When a blocked target is detected,
  * keep the overlay visible while bouncing the underlying app to HOME.
  * Launcher/overlay/focus events must NOT dismiss the gate. Only a user action,
  * disabling the gate, a new target, an unlock grant, or the lock screen does.
@@ -35,6 +36,19 @@ import android.widget.TextView
  *
  * This service reads package names only; no text, screen captures or gestures.
  * It does not block Settings, phone calls or app removal.
+ *
+ * RECENTS REGRESSION NOTE (Module 10 fix reverted in Module 11):
+ * A previous fix attempted to dismiss the gate when "unrelated" apps come to
+ * the foreground via Recents. This was incorrect: latchGate() sends
+ * GLOBAL_ACTION_HOME, which itself fires window events that temporarily update
+ * foregroundPackage to the launcher and then to LevelUp (as it comes to front).
+ * reevaluate() was then seeing foregroundPackage == packageName and calling
+ * clearGate("foreground is LevelUp"), killing the gate immediately.
+ *
+ * The correct fix: while the gate is latched, block ALL foreground-package
+ * updates from window events (restoring the original v3 guard). The 1-second
+ * poll also skips foreground reads while gate is showing. Only the explicit
+ * release conditions can dismiss a latched gate.
  */
 class LevelUpAccessibilityService : AccessibilityService() {
     companion object {
@@ -58,9 +72,21 @@ class LevelUpAccessibilityService : AccessibilityService() {
     private var ignoreReentryUntil: Long = 0L
     private var monitoring = false
 
+    private val homeRetryRunnable = Runnable {
+        val target = prefs.getString("target", "com.google.android.youtube") ?: "com.google.android.youtube"
+        if (gateView != null && gatedPackage == target) {
+            val retryWorked = performGlobalAction(GLOBAL_ACTION_HOME)
+            Log.i(TAG, "HOME_RETRY success=$retryWorked target=$target")
+        }
+    }
+
     private val poll = object : Runnable {
         override fun run() {
             if (!monitoring) return
+            // Do NOT poll foreground while gate is latched.
+            // latchGate() fires GLOBAL_ACTION_HOME → launcher window events → LevelUp window events.
+            // Updating foregroundPackage during this period would cause reevaluate() to see
+            // packageName as foreground and call clearGate("foreground is LevelUp").
             if (gateView == null && prefs.getBoolean("enabled", false)) {
                 foregroundFromWindows()?.let { updateForeground(it, "poll") }
             }
@@ -91,9 +117,13 @@ class LevelUpAccessibilityService : AccessibilityService() {
         if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             type != AccessibilityEvent.TYPE_WINDOWS_CHANGED) return
 
-        // v2 BUG: changing focus from the target to the overlay/launcher
-        // caused a dismissal, followed by another display -> visible flashing.
-        // While latched, ignore window changes; reevaluate only explicit rules.
+        // While the gate is latched, do NOT update foregroundPackage from window events.
+        // latchGate() calls GLOBAL_ACTION_HOME, which fires window events bringing the launcher
+        // then LevelUp itself to foreground. Without this guard, reevaluate() would see
+        // foregroundPackage == packageName and call clearGate("foreground is LevelUp"),
+        // killing the overlay immediately after it was shown.
+        // Only explicit release conditions (unlock, target change, keyguard, disable) may
+        // dismiss a latched gate.
         if (gateView != null) {
             reevaluate()
             return
@@ -167,12 +197,8 @@ class LevelUpAccessibilityService : AccessibilityService() {
             Log.i(TAG, "HOME_ACTION success=$homeWorked target=$target")
             if (!homeWorked) {
                 // One bounded retry, never a loop of actions / overlay recreation.
-                handler.postDelayed({
-                    if (gateView != null && gatedPackage == target) {
-                        val retryWorked = performGlobalAction(GLOBAL_ACTION_HOME)
-                        Log.i(TAG, "HOME_RETRY success=$retryWorked target=$target")
-                    }
-                }, 400L)
+                handler.removeCallbacks(homeRetryRunnable)
+                handler.postDelayed(homeRetryRunnable, 400L)
             }
         } catch (e: Exception) {
             gateView = null
@@ -248,6 +274,7 @@ class LevelUpAccessibilityService : AccessibilityService() {
     }
 
     private fun clearGate(reason: String) {
+        handler.removeCallbacks(homeRetryRunnable)
         val old = gateView ?: run {
             gatedPackage = null
             return
@@ -259,6 +286,20 @@ class LevelUpAccessibilityService : AccessibilityService() {
             Log.i(TAG, "GATE_RELEASED reason=$reason")
         } catch (e: Exception) {
             Log.w(TAG, "Failed removing gate", e)
+        }
+    }
+
+    private fun isHomeLauncher(pkg: String?): Boolean {
+        if (pkg.isNullOrBlank()) return false
+        return try {
+            val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            val defaultHome = packageManager.resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
+                ?.activityInfo?.packageName
+            if (defaultHome == pkg) return true
+            val resolveInfos = packageManager.queryIntentActivities(homeIntent, 0)
+            resolveInfos.any { it.activityInfo?.packageName == pkg }
+        } catch (e: Exception) {
+            false
         }
     }
 

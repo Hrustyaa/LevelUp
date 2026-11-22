@@ -10,6 +10,9 @@ abstract class IPoseEventSource {
   /// Reactive stream of evaluated [SquatCounterResult] snapshots.
   Stream<SquatCounterResult> get poseStream;
 
+  /// Whether this source emits simulated / artificial pose angles rather than camera-verified poses.
+  bool get isSimulated;
+
   /// Disposes resources held by the event source.
   void dispose();
 }
@@ -21,16 +24,21 @@ class PoseEngineAdapter implements IPoseEventSource {
   final StreamController<SquatCounterResult> _controller =
       StreamController<SquatCounterResult>.broadcast();
 
+  @override
+  final bool isSimulated;
+
   PoseEngineAdapter({
     SquatCounter? counter,
+    this.isSimulated = false,
   }) : _counter = counter ?? SquatCounter();
 
   @override
   Stream<SquatCounterResult> get poseStream => _controller.stream;
 
   /// Processes a single knee angle measurement and emits the evaluated result.
-  SquatCounterResult processAngle(double? angle) {
-    final result = _counter.processAngle(angle);
+  SquatCounterResult processAngle(double? angle, {bool? isSimulated}) {
+    final simulatedFlag = isSimulated ?? this.isSimulated;
+    final result = _counter.processAngle(angle, isSimulated: simulatedFlag);
     if (!_controller.isClosed) {
       _controller.add(result);
     }

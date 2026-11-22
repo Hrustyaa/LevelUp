@@ -65,6 +65,9 @@ abstract class ICoreIntegrationCoordinator {
   /// Awaits completion of the asynchronous background persistence and access grant workflow.
   Future<void> waitForCompletion([Duration timeout = const Duration(seconds: 5)]);
 
+  /// Releases a completed, cancelled, or failed workout session and resets coordinator state.
+  void releaseTerminalSession();
+
   /// Disposes coordinator resources, event subscriptions, and controllers.
   void dispose();
 }
@@ -135,6 +138,22 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
 
   @override
   Future<WorkoutSession> launchUnlockChallenge({bool requirePendingRequest = false}) async {
+    // 0. Ensure no workout session is already active or in-flight before consuming native request
+    if (_currentState.sessionStatus == WorkoutSessionStatus.active ||
+        _currentState.sessionStatus == WorkoutSessionStatus.preparing) {
+      final error = SessionAlreadyActiveException(
+        _currentState.sessionId ?? 'active_session',
+      );
+      _emitState(_currentState.copyWith(errorMessage: error.message));
+      throw error;
+    }
+
+    // Release any previous terminal session to ensure a clean lifecycle
+    final prevSession = _sessionManager.currentSession;
+    if (prevSession != null && prevSession.status.isTerminal) {
+      _sessionManager.releaseCurrentSession();
+    }
+
     // 1. Query and validate live Focus state
     final focusState = await _focusService.getFocusStatus();
 
@@ -192,7 +211,7 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
       ),
       isFocusEnabled: focusState.isUserEnabled,
       accessGrantStatus: null,
-      unlockUntil: focusState.unlockUntil,
+      unlockUntil: null,
       isWorkoutPersisted: false,
       accessAttemptState: null,
       feedbackMessage: 'Встань так, чтобы камера видела ноги и корпус',
@@ -204,6 +223,22 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
 
   @override
   Future<WorkoutSession> launchFreeWorkout() async {
+    // 0. Ensure no workout session is already active or in-flight
+    if (_currentState.sessionStatus == WorkoutSessionStatus.active ||
+        _currentState.sessionStatus == WorkoutSessionStatus.preparing) {
+      final error = SessionAlreadyActiveException(
+        _currentState.sessionId ?? 'active_session',
+      );
+      _emitState(_currentState.copyWith(errorMessage: error.message));
+      throw error;
+    }
+
+    // Release any previous terminal session to ensure a clean lifecycle
+    final prevSession = _sessionManager.currentSession;
+    if (prevSession != null && prevSession.status.isTerminal) {
+      _sessionManager.releaseCurrentSession();
+    }
+
     // 1. Create Free Workout request
     final challengeRequest = _challengeService.createFreeWorkoutRequest();
     final challengeDef = _challengeService.getChallengeDefinition(challengeRequest.challengeId);
@@ -234,6 +269,13 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
   @override
   void attachPoseEventSource(IPoseEventSource source) {
     detachPoseEventSource();
+
+    if (_nativeBridge is NativeBridge && source.isSimulated) {
+      throw StateError(
+        'Security Violation: Simulated pose event source cannot be attached when operating with real native platform bridge.',
+      );
+    }
+
     _poseSubscription = source.poseStream.listen((result) async {
       try {
         await handlePoseResult(result);
@@ -254,6 +296,12 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
     SquatCounterResult result, {
     String? eventId,
   }) async {
+    if (_nativeBridge is NativeBridge && result.isSimulated) {
+      throw StateError(
+        'Security Violation: Simulated pose result cannot be evaluated when operating with real native platform bridge.',
+      );
+    }
+
     final activeSession = _sessionManager.currentSession;
     if (activeSession == null) return null;
 
@@ -355,6 +403,10 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
     }
 
     final completedSession = _sessionManager.currentSession!;
+    _emitState(_currentState.copyWith(
+      sessionStatus: completedSession.status,
+      verifiedRepetitions: completedSession.verifiedRepetitions,
+    ));
     _completionCompleter ??= Completer<void>();
     await _executeCompletionWorkflow(completedSession);
   }
@@ -365,6 +417,26 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
     if (completer != null && !completer.isCompleted) {
       await completer.future.timeout(timeout);
     }
+  }
+
+  @override
+  void releaseTerminalSession() {
+    final session = _sessionManager.currentSession;
+    if (session != null && session.status.isTerminal) {
+      _sessionManager.releaseCurrentSession();
+    }
+    _emitState(_currentState.copyWith(
+      sessionId: null,
+      sessionStatus: WorkoutSessionStatus.created,
+      verifiedRepetitions: 0,
+      targetRepetitions: 5,
+      accessGrantStatus: null,
+      unlockUntil: null,
+      accessAttemptState: null,
+      isWorkoutPersisted: false,
+      feedbackMessage: 'Встань так, чтобы камера видела ноги и корпус',
+      clearError: true,
+    ));
   }
 
   Future<void> _executeCompletionWorkflow(WorkoutSession session) async {
@@ -465,6 +537,11 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
           confirmedAt: _clock(),
           unlockUntil: grantResult.unlockUntil!,
         );
+
+        // Synchronize FocusService with fresh native state
+        try {
+          await _focusService.refreshState();
+        } catch (_) {}
 
         _emitState(_currentState.copyWith(
           accessGrantStatus: AccessGrantStatus.granted,

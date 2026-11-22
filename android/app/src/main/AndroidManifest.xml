@@ -2,8 +2,12 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
-    <!-- Only the three explicit test targets; no all-packages permission. -->
+    <!-- Only the explicit test targets and Home Launcher category; no all-packages permission. -->
     <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
         <package android:name="com.google.android.youtube" />
         <package android:name="com.instagram.android" />
         <package android:name="com.zhiliaoapp.musically" />

@@ -51,6 +51,9 @@ class SquatCounterResult {
   /// Real-time posture feedback message matching the LevelUp prototype.
   final String feedbackMessage;
 
+  /// Whether this result was generated via manual angle simulation rather than live camera tracking.
+  final bool isSimulated;
+
   const SquatCounterResult({
     required this.repetitionCount,
     required this.phase,
@@ -60,6 +63,7 @@ class SquatCounterResult {
     required this.consecutiveDownFrames,
     required this.consecutiveUpFrames,
     required this.feedbackMessage,
+    this.isSimulated = false,
   });
 
   @override
@@ -74,7 +78,8 @@ class SquatCounterResult {
           isValidTracking == other.isValidTracking &&
           consecutiveDownFrames == other.consecutiveDownFrames &&
           consecutiveUpFrames == other.consecutiveUpFrames &&
-          feedbackMessage == other.feedbackMessage;
+          feedbackMessage == other.feedbackMessage &&
+          isSimulated == other.isSimulated;
 
   @override
   int get hashCode => Object.hash(
@@ -86,11 +91,12 @@ class SquatCounterResult {
         consecutiveDownFrames,
         consecutiveUpFrames,
         feedbackMessage,
+        isSimulated,
       );
 
   @override
   String toString() =>
-      'SquatCounterResult(reps: $repetitionCount, phase: $phase, completed: $isRepetitionCompleted, angle: ${kneeAngle?.toStringAsFixed(1)}°)';
+      'SquatCounterResult(reps: $repetitionCount, phase: $phase, completed: $isRepetitionCompleted, angle: ${kneeAngle?.toStringAsFixed(1)}°, simulated: $isSimulated)';
 }
 
 /// Pure Dart state machine for counting squats based on interior knee angle.
@@ -129,7 +135,7 @@ class SquatCounter {
   /// Processes a single frame's knee angle and updates the state machine.
   ///
   /// Passing `null` indicates that landmarks were missing or below confidence threshold.
-  SquatCounterResult processAngle(double? angle) {
+  SquatCounterResult processAngle(double? angle, {bool isSimulated = false}) {
     if (angle == null) {
       // Invalidate consecutive frame debounce when tracking is lost
       _consecutiveDown = 0;
@@ -144,6 +150,7 @@ class SquatCounter {
         consecutiveDownFrames: 0,
         consecutiveUpFrames: 0,
         feedbackMessage: 'Не вижу бедро, колено и стопу — повернись боком',
+        isSimulated: isSimulated,
       );
     }
 
@@ -190,6 +197,7 @@ class SquatCounter {
       consecutiveDownFrames: _consecutiveDown,
       consecutiveUpFrames: _consecutiveUp,
       feedbackMessage: feedback,
+      isSimulated: isSimulated,
     );
   }
 }

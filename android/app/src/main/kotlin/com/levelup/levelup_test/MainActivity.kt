@@ -24,10 +24,16 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "getState" -> {
+                        val currentMs = System.currentTimeMillis()
+                        val target = prefs.getString("target", "com.google.android.youtube") ?: "com.google.android.youtube"
+                        val enabled = prefs.getBoolean("enabled", false)
+                        val unlockUntil = prefs.getLong("unlock_until", 0L)
+                        val remainingMs = if (unlockUntil > currentMs) unlockUntil - currentMs else 0L
+                        android.util.Log.d("LevelUpGate", "GET_STATE target=$target enabled=$enabled unlockUntil=$unlockUntil currentMs=$currentMs remainingMs=$remainingMs")
                         result.success(mapOf(
-                            "target" to prefs.getString("target", "com.google.android.youtube"),
-                            "enabled" to prefs.getBoolean("enabled", false),
-                            "unlockUntil" to prefs.getLong("unlock_until", 0L),
+                            "target" to target,
+                            "enabled" to enabled,
+                            "unlockUntil" to unlockUntil,
                             "serviceEnabled" to isServiceEnabled()
                         ))
                     }
@@ -57,10 +63,12 @@ class MainActivity : FlutterActivity() {
                         result.success(requested)
                     }
                     "grantAccess" -> {
+                        val startMs = System.currentTimeMillis()
                         val minutes = (call.argument<Int>("minutes") ?: 5).coerceIn(1, 15)
-                        val unlockUntil = System.currentTimeMillis() + minutes * 60_000L
+                        val unlockUntil = startMs + minutes * 60_000L
                         prefs.edit().putLong("unlock_until", unlockUntil).apply()
                         LevelUpAccessibilityService.instance?.reevaluate()
+                        android.util.Log.i("LevelUpGate", "GRANT_ACCESS startMs=$startMs unlockUntil=$unlockUntil durationMs=${unlockUntil - startMs} minutes=$minutes")
                         result.success(unlockUntil)
                         // Only attempts to return to one of the three user-selected apps.
                         val target = prefs.getString("target", "com.google.android.youtube")
