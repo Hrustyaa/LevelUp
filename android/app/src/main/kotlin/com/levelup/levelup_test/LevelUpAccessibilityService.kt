@@ -5,56 +5,49 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.graphics.Color
 import android.graphics.PixelFormat
-import android.graphics.Typeface
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
+import android.view.LayoutInflater
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Button
-import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
+import java.util.Locale
 
 /**
  * LevelUp v3: an opt-in, best-effort app gate for Android.
  *
- * Key design invariant: the gate is LATCHED. When a blocked target is detected,
- * keep the overlay visible while bouncing the underlying app to HOME.
- * Launcher/overlay/focus events must NOT dismiss the gate. Only a user action,
- * disabling the gate, a new target, an unlock grant, or the lock screen does.
- *
- * HOME typically pauses ordinary video sound because the media app is no longer
- * foreground. It cannot silence apps that deliberately support background
- * playback / PiP. The service never changes device-wide volume.
- *
- * This service reads package names only; no text, screen captures or gestures.
- * It does not block Settings, phone calls or app removal.
- *
- * RECENTS REGRESSION NOTE (Module 10 fix reverted in Module 11):
- * A previous fix attempted to dismiss the gate when "unrelated" apps come to
- * the foreground via Recents. This was incorrect: latchGate() sends
- * GLOBAL_ACTION_HOME, which itself fires window events that temporarily update
- * foregroundPackage to the launcher and then to LevelUp (as it comes to front).
- * reevaluate() was then seeing foregroundPackage == packageName and calling
- * clearGate("foreground is LevelUp"), killing the gate immediately.
- *
- * The correct fix: while the gate is latched, block ALL foreground-package
- * updates from window events (restoring the original v3 guard). The 1-second
- * poll also skips foreground reads while gate is showing. Only the explicit
- * release conditions can dismiss a latched gate.
+ * Key design invariant:
+ * - The gate overlay sits directly over the blocked target without calling
+ *   GLOBAL_ACTION_HOME on latch, so the blocked app remains the underlying
+ *   TYPE_APPLICATION window until the user leaves it.
+ * - Swiping Home, switching via Recents, or opening LevelUp / any unrestricted
+ *   app changes the foreground TYPE_APPLICATION window and immediately
+ *   dismisses the overlay via [GateLifecyclePolicy].
+ * - Unrelated system windows (notifications, volume, permission dialogs) never
+ *   dismiss the gate.
  */
 class LevelUpAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "LevelUpGate"
         private const val POLL_INTERVAL_MS = 1000L
         private const val NAVIGATION_GRACE_MS = 1800L
+        private const val DEFAULT_TARGET = "com.google.android.youtube"
+
+        private val TARGET_DISPLAY_NAMES = mapOf(
+            "com.google.android.youtube" to "YouTube",
+            "com.instagram.android" to "Instagram",
+            "com.zhiliaoapp.musically" to "TikTok",
+        )
 
         @Volatile
         var instance: LevelUpAccessibilityService? = null
@@ -62,6 +55,9 @@ class LevelUpAccessibilityService : AccessibilityService() {
     }
 
     private val prefs by lazy { getSharedPreferences("levelup_gate", Context.MODE_PRIVATE) }
+    private val flutterPrefs by lazy {
+        getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+    }
     private val windowManager by lazy { getSystemService(WINDOW_SERVICE) as WindowManager }
     private val keyguardManager by lazy { getSystemService(KEYGUARD_SERVICE) as KeyguardManager }
     private val handler = Handler(Looper.getMainLooper())
@@ -72,22 +68,10 @@ class LevelUpAccessibilityService : AccessibilityService() {
     private var ignoreReentryUntil: Long = 0L
     private var monitoring = false
 
-    private val homeRetryRunnable = Runnable {
-        val target = prefs.getString("target", "com.google.android.youtube") ?: "com.google.android.youtube"
-        if (gateView != null && gatedPackage == target) {
-            val retryWorked = performGlobalAction(GLOBAL_ACTION_HOME)
-            Log.i(TAG, "HOME_RETRY success=$retryWorked target=$target")
-        }
-    }
-
     private val poll = object : Runnable {
         override fun run() {
             if (!monitoring) return
-            // Do NOT poll foreground while gate is latched.
-            // latchGate() fires GLOBAL_ACTION_HOME → launcher window events → LevelUp window events.
-            // Updating foregroundPackage during this period would cause reevaluate() to see
-            // packageName as foreground and call clearGate("foreground is LevelUp").
-            if (gateView == null && prefs.getBoolean("enabled", false)) {
+            if (prefs.getBoolean("enabled", false)) {
                 foregroundFromWindows()?.let { updateForeground(it, "poll") }
             }
             reevaluate()
@@ -98,6 +82,7 @@ class LevelUpAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        clearGate("service connected")
         val info = serviceInfo
         info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
             AccessibilityEvent.TYPE_WINDOWS_CHANGED
@@ -108,7 +93,7 @@ class LevelUpAccessibilityService : AccessibilityService() {
         monitoring = true
         handler.removeCallbacks(poll)
         handler.post(poll)
-        Log.i(TAG, "Connected v3: latched gate + HOME audio mitigation")
+        Log.i(TAG, "Connected v3: fullscreen LevelUp gate + Home-gesture safe lifecycle")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -117,89 +102,93 @@ class LevelUpAccessibilityService : AccessibilityService() {
         if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             type != AccessibilityEvent.TYPE_WINDOWS_CHANGED) return
 
-        // While the gate is latched, do NOT update foregroundPackage from window events.
-        // latchGate() calls GLOBAL_ACTION_HOME, which fires window events bringing the launcher
-        // then LevelUp itself to foreground. Without this guard, reevaluate() would see
-        // foregroundPackage == packageName and call clearGate("foreground is LevelUp"),
-        // killing the overlay immediately after it was shown.
-        // Only explicit release conditions (unlock, target change, keyguard, disable) may
-        // dismiss a latched gate.
-        if (gateView != null) {
-            reevaluate()
-            return
-        }
-
         val eventPackage = event.packageName?.toString()
-        val resolved = when {
-            eventPackage == packageName -> packageName
-            type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-                isCandidateApplication(eventPackage) -> eventPackage
-            else -> foregroundFromWindows()
+        val resolved = if (gateView != null) {
+            // While the gate is latched, ignore raw event.packageName from our own
+            // TYPE_ACCESSIBILITY_OVERLAY or transient system windows; inspect
+            // authoritative TYPE_APPLICATION windows instead.
+            foregroundFromWindows()
+        } else {
+            when {
+                eventPackage == packageName -> foregroundFromWindows() ?: packageName
+                type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                    isCandidateApplication(eventPackage) -> eventPackage
+                else -> foregroundFromWindows()
+            }
         }
         if (resolved != null) updateForeground(resolved, "event=$type")
         reevaluate()
     }
 
     override fun onInterrupt() {
-        // Accessibility services can be interrupted by the OS. Fail open.
         clearGate("service interrupted")
     }
 
-    /** Invoked by the existing MainActivity MethodChannel after state changes. */
+    /** Invoked by MainActivity MethodChannel or lifecycle events after state changes. */
     fun reevaluate() {
-        if (!prefs.getBoolean("enabled", false)) {
-            clearGate("disabled")
-            return
-        }
-        if (keyguardManager.isKeyguardLocked) {
-            clearGate("keyguard")
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            handler.post { reevaluate() }
             return
         }
 
-        val target = prefs.getString("target", "com.google.android.youtube")
-            ?: "com.google.android.youtube"
-        val unlocked = prefs.getLong("unlock_until", 0L) > System.currentTimeMillis()
+        val target = prefs.getString("target", DEFAULT_TARGET) ?: DEFAULT_TARGET
+        val fg = foregroundPackage
+        val snapshot = GateStateSnapshot(
+            focusEnabled = prefs.getBoolean("enabled", false),
+            isKeyguardLocked = keyguardManager.isKeyguardLocked,
+            selectedTarget = target,
+            unlockUntilMs = prefs.getLong("unlock_until", 0L),
+            nowMs = System.currentTimeMillis(),
+            uptimeMs = SystemClock.uptimeMillis(),
+            foregroundPackage = fg,
+            isForegroundCandidateApp = isCandidateApplication(fg),
+            gatedPackage = gatedPackage,
+            ignoreReentryUntilUptimeMs = ignoreReentryUntil,
+        )
 
-        // An existing gate is kept on-screen even after HOME is foreground.
-        // Only intentional release conditions may dismiss it.
-        if (gateView != null) {
-            if (gatedPackage != target || unlocked) {
-                clearGate(if (unlocked) "access granted" else "target changed")
-            }
-            return
+        when (val action = GateLifecyclePolicy.evaluate(snapshot)) {
+            is GateAction.None -> Unit
+            is GateAction.DismissGate -> clearGate(action.reason)
+            is GateAction.ShowGate -> latchGate(action.targetPackage)
         }
-
-        if (SystemClock.uptimeMillis() < ignoreReentryUntil) return
-        if (foregroundPackage != target || unlocked) return
-
-        latchGate(target)
     }
 
     private fun latchGate(target: String) {
         if (gateView != null) return
-        val root = createGateView()
+        val root = createGateView(target)
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        } else {
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        }
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        )
+            flags,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                fitInsetsTypes = 0
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+
         try {
             windowManager.addView(root, params)
             gateView = root
             gatedPackage = target
             Log.i(TAG, "GATE_LATCHED target=$target")
-            // Critical for audio: bring the media app to the background.
-            // This generally pauses its regular video/audio playback.
-            val homeWorked = performGlobalAction(GLOBAL_ACTION_HOME)
-            Log.i(TAG, "HOME_ACTION success=$homeWorked target=$target")
-            if (!homeWorked) {
-                // One bounded retry, never a loop of actions / overlay recreation.
-                handler.removeCallbacks(homeRetryRunnable)
-                handler.postDelayed(homeRetryRunnable, 400L)
-            }
         } catch (e: Exception) {
             gateView = null
             gatedPackage = null
@@ -207,74 +196,141 @@ class LevelUpAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun createGateView(): View {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(30.dp, 20.dp, 30.dp, 20.dp)
-            setBackgroundColor(Color.rgb(17, 22, 26))
-            isClickable = true
-            isFocusable = true
-        }
-        fun line(value: String, size: Float, bold: Boolean = false) =
-            TextView(this).apply {
-                text = value
-                textSize = size
-                gravity = Gravity.CENTER
-                setTextColor(Color.WHITE)
-                if (bold) setTypeface(typeface, Typeface.BOLD)
-                setPadding(6.dp, 10.dp, 6.dp, 10.dp)
-            }
-        root.addView(line("LEVELUP", 22f, true))
-        root.addView(line("Move to unlock", 26f, true))
-        root.addView(line("5 squats = 5 minutes. The distracting app is moved to the background during this challenge.", 16f))
+    private fun createGateView(target: String): View {
+        val root = LayoutInflater.from(this).inflate(R.layout.view_levelup_gate, null)
+        val scrollView = root.findViewById<ScrollView>(R.id.gate_scroll)
+        applySystemInsets(scrollView)
 
-        root.addView(Button(this).apply {
-            text = "Start challenge"
+        val lang = resolveLanguage()
+        val appName = resolveTargetDisplayName(target)
+
+        root.findViewById<TextView>(R.id.gate_focus_label).text = tr(
+            lang,
+            en = "FOCUS MODE",
+            ru = "РЕЖИМ ФОКУСА",
+            kk = "ФОКУС РЕЖИМІ",
+        )
+        root.findViewById<TextView>(R.id.gate_headline).text = tr(
+            lang,
+            en = "Stay focused.",
+            ru = "Сохраняй фокус.",
+            kk = "Назарды сақта.",
+        )
+        root.findViewById<TextView>(R.id.gate_target_app).text = appName
+        root.findViewById<TextView>(R.id.gate_challenge_title).text = tr(
+            lang,
+            en = "Squat Challenge · 5 reps",
+            ru = "Приседания · 5 повторений",
+            kk = "Отырып-тұру · 5 рет",
+        )
+        root.findViewById<TextView>(R.id.gate_challenge_subtitle).text = tr(
+            lang,
+            en = "Earn 5 minutes of access by completing 5 verified squats.",
+            ru = "Выполни 5 приседаний с проверкой, чтобы получить 5 минут доступа.",
+            kk = "5 минут рұқсат алу үшін 5 отырып-тұру жасаңыз.",
+        )
+
+        root.findViewById<Button>(R.id.gate_start_button).apply {
+            text = tr(
+                lang,
+                en = "Start Challenge",
+                ru = "Начать задание",
+                kk = "Тапсырманы бастау",
+            )
             setOnClickListener {
                 prefs.edit().putBoolean("open_challenge", true).apply()
                 beginNavigationAwayFromGate()
                 try {
-                    startActivity(Intent(this@LevelUpAccessibilityService, MainActivity::class.java).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                            Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                    })
+                    startActivity(
+                        Intent(this@LevelUpAccessibilityService, MainActivity::class.java).apply {
+                            addFlags(
+                                Intent.FLAG_ACTIVITY_NEW_TASK or
+                                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            )
+                        }
+                    )
                 } catch (e: Exception) {
                     Log.e(TAG, "Cannot launch challenge", e)
                     prefs.edit().putBoolean("open_challenge", false).apply()
                     performGlobalAction(GLOBAL_ACTION_HOME)
                 }
             }
-        })
-        root.addView(Button(this).apply {
-            text = "Return home (skip)"
+        }
+
+        root.findViewById<Button>(R.id.gate_back_button).apply {
+            text = tr(
+                lang,
+                en = "Go Back",
+                ru = "Назад",
+                kk = "Артқа",
+            )
             setOnClickListener {
                 beginNavigationAwayFromGate()
                 performGlobalAction(GLOBAL_ACTION_HOME)
             }
-        })
-        root.addView(Button(this).apply {
-            text = "Turn off restriction"
-            setOnClickListener {
-                prefs.edit().putBoolean("enabled", false).apply()
-                beginNavigationAwayFromGate()
-                performGlobalAction(GLOBAL_ACTION_HOME)
-                Log.i(TAG, "Disabled by user")
-            }
-        })
+        }
+
         return root
     }
 
+    private fun applySystemInsets(scrollView: ScrollView) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            scrollView.setOnApplyWindowInsetsListener { v, insets ->
+                val bars = insets.getInsets(
+                    WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
+                )
+                v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+                insets
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            scrollView.setOnApplyWindowInsetsListener { v, insets ->
+                v.setPadding(
+                    insets.systemWindowInsetLeft,
+                    insets.systemWindowInsetTop,
+                    insets.systemWindowInsetRight,
+                    insets.systemWindowInsetBottom,
+                )
+                insets
+            }
+        }
+        scrollView.requestApplyInsets()
+    }
+
+    private fun resolveLanguage(): String {
+        val saved = flutterPrefs.getString("flutter.levelup.welcome.language", null)
+        if (saved == "en" || saved == "ru" || saved == "kk") return saved
+        return when (Locale.getDefault().language) {
+            "ru" -> "ru"
+            "kk" -> "kk"
+            else -> "en"
+        }
+    }
+
+    private fun resolveTargetDisplayName(target: String): String {
+        TARGET_DISPLAY_NAMES[target]?.let { return it }
+        return try {
+            val appInfo = packageManager.getApplicationInfo(target, 0)
+            packageManager.getApplicationLabel(appInfo).toString()
+        } catch (_: Exception) {
+            "App"
+        }
+    }
+
+    private fun tr(lang: String, en: String, ru: String, kk: String): String = when (lang) {
+        "ru" -> ru
+        "kk" -> kk
+        else -> en
+    }
+
     private fun beginNavigationAwayFromGate() {
-        // Avoid treating our own transition as an immediate new blocked launch.
         ignoreReentryUntil = SystemClock.uptimeMillis() + NAVIGATION_GRACE_MS
         foregroundPackage = null
         clearGate("user action")
     }
 
     private fun clearGate(reason: String) {
-        handler.removeCallbacks(homeRetryRunnable)
         val old = gateView ?: run {
             gatedPackage = null
             return
@@ -286,20 +342,6 @@ class LevelUpAccessibilityService : AccessibilityService() {
             Log.i(TAG, "GATE_RELEASED reason=$reason")
         } catch (e: Exception) {
             Log.w(TAG, "Failed removing gate", e)
-        }
-    }
-
-    private fun isHomeLauncher(pkg: String?): Boolean {
-        if (pkg.isNullOrBlank()) return false
-        return try {
-            val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-            val defaultHome = packageManager.resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
-                ?.activityInfo?.packageName
-            if (defaultHome == pkg) return true
-            val resolveInfos = packageManager.queryIntentActivities(homeIntent, 0)
-            resolveInfos.any { it.activityInfo?.packageName == pkg }
-        } catch (e: Exception) {
-            false
         }
     }
 
@@ -343,6 +385,4 @@ class LevelUpAccessibilityService : AccessibilityService() {
         instance = null
         super.onDestroy()
     }
-
-    private val Int.dp: Int get() = (this * resources.displayMetrics.density).toInt()
 }
