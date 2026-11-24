@@ -20,14 +20,24 @@ class TestCenterScreen extends StatefulWidget {
 
 class _TestCenterScreenState extends State<TestCenterScreen> {
   late final TestScenarioRunner _runner;
+  bool _isRunnerInitialized = false;
   TestExecutionType? _selectedTypeFilter;
   final Set<String> _expandedScenarioIds = {};
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final controller = DevLabScope.of(context);
-    _runner = TestScenarioRunner(controller);
+    if (!_isRunnerInitialized) {
+      final controller = DevLabScope.of(context);
+      _runner = TestScenarioRunner(controller);
+      _isRunnerInitialized = true;
+    }
+  }
+
+  @override
+  void dispose() {
+    _runner.dispose();
+    super.dispose();
   }
 
   Color _statusColor(TestRunStatus status) {

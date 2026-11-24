@@ -73,6 +73,8 @@ class _WorkoutResultScreenState extends State<WorkoutResultScreen>
 
   Future<void> _loadData() async {
     if (!mounted) return;
+    _countdownTicker?.cancel();
+    _countdownTicker = null;
     final controller = DevLabScope.of(context);
     setState(() => _isLoading = true);
 
@@ -115,10 +117,12 @@ class _WorkoutResultScreenState extends State<WorkoutResultScreen>
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
-        // Start countdown ticker only when there is an active timed access window.
+        // Start countdown ticker only when there is an active timed access window in the future.
         // This prevents the timer from keeping the Flutter clock busy in tests
-        // where no access grant is in flight.
-        if (_nativeUnlockUntil != null && _countdownTicker == null) {
+        // or ticking needlessly when expired.
+        if (_nativeUnlockUntil != null &&
+            _nativeUnlockUntil!.isAfter(DateTime.now()) &&
+            _countdownTicker == null) {
           _countdownTicker = Timer.periodic(const Duration(seconds: 1), (_) {
             if (!mounted) return;
             if (_nativeUnlockUntil != null) {
@@ -129,6 +133,10 @@ class _WorkoutResultScreenState extends State<WorkoutResultScreen>
                 setState(() => _isNativeAccessActive = nowActive);
               } else {
                 setState(() {});
+              }
+              if (remainingMs <= 0) {
+                _countdownTicker?.cancel();
+                _countdownTicker = null;
               }
             }
           });
