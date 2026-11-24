@@ -5,7 +5,9 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'app/challenge/production_challenge_screen.dart';
 import 'app/di/app_scope.dart';
+import 'core/constants/channel_constants.dart';
 import 'data/android_app_catalog.dart';
 import 'data/android_usage_gateway.dart';
 import 'data/dashboard_data.dart';
@@ -297,11 +299,37 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
     if (!mounted || !_onboardingCompleted || _challengeOpen) return;
     _challengeOpen = true;
 
-    // Challenge Safety (Phase I2A):
-    // If running in production with AppScope, real ML Kit camera pose verification
-    // will be connected in Phase I2B. Do not grant access or invoke test-kit challenge.
+    // Phase I2B: Authoritative Gate -> Coordinator -> ML Kit -> AccessService flow
     if (_scope != null) {
-      _challengeOpen = false;
+      final scope = _scope!;
+      try {
+        final session = await scope.coordinator.launchUnlockChallenge(
+          requirePendingRequest: true,
+        );
+        if (!mounted) return;
+        final target = session.targetPackage;
+        final appName =
+            ChannelConstants.targetDisplayNames[target] ??
+            _catalog.where((app) => app.id == target).firstOrNull?.name ??
+            target ??
+            'App';
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (_) => ProductionChallengeScreen(
+              scope: scope,
+              isUnlockChallenge: true,
+              appName: appName,
+              language: _language.name,
+            ),
+          ),
+        );
+        await scope.refresh();
+        if (mounted) setState(() {});
+      } catch (_) {
+        // Normal resume without pending native gate request, or ineligible state.
+      } finally {
+        _challengeOpen = false;
+      }
       return;
     }
 
@@ -562,6 +590,32 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
     );
   }
 
+  Future<void> _openFreeWorkout() async {
+    final scope = _scope;
+    if (scope == null) {
+      await _handleMovementNotice();
+      return;
+    }
+    if (!mounted || _challengeOpen) return;
+    _challengeOpen = true;
+    try {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => ProductionChallengeScreen(
+            scope: scope,
+            isUnlockChallenge: false,
+            appName: '',
+            language: _language.name,
+          ),
+        ),
+      );
+      await scope.refresh();
+      if (mounted) setState(() {});
+    } finally {
+      _challengeOpen = false;
+    }
+  }
+
   Widget _buildHomeScreen() {
     return LevelUpHomeScreen(
       gateway: _focusGateway,
@@ -591,7 +645,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
         _saveWelcomeLanguage(lang);
         setState(() => _language = lang);
       },
-      onMovement: _handleMovementNotice,
+      onMovement: _scope != null ? _openFreeWorkout : _handleMovementNotice,
       loadInsights: _loadDashboardInsights,
     );
   }

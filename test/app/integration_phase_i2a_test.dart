@@ -1,5 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:levelup_test/app/challenge/production_challenge_screen.dart';
 import 'package:levelup_test/app/di/app_scope.dart';
 import 'package:levelup_test/core/constants/channel_constants.dart';
 import 'package:levelup_test/core/integration/core_integration_coordinator.dart';
@@ -324,7 +325,7 @@ void main() {
       expect(scope.focusService.currentState?.isAccessibilityGranted, isTrue);
     });
 
-    testWidgets('5. Challenge tab Movement action displays Phase I2B unavailable dialog and never calls grantAccess', (tester) async {
+    testWidgets('5. Challenge tab Movement action launches Free Workout without ever calling grantAccess', (tester) async {
       SharedPreferences.setMockInitialValues({
         'levelup.onboarding.completed': true,
         'levelup.welcome.language': 'en',
@@ -345,13 +346,15 @@ void main() {
       final openChallengeBtn = find.text('Open movement challenge');
       await tester.ensureVisible(openChallengeBtn);
       await tester.tap(openChallengeBtn);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
 
-      expect(find.text('Movement Challenge'), findsOneWidget);
-      expect(
-        find.textContaining('Phase I2B'),
-        findsOneWidget,
+      expect(find.byType(ProductionChallengeScreen), findsOneWidget);
+      final screen = tester.widget<ProductionChallengeScreen>(
+        find.byType(ProductionChallengeScreen),
       );
+      expect(screen.isUnlockChallenge, isFalse);
       expect(methodCalls, isNot(contains(ChannelConstants.methodGrantAccess)));
       expect(methodCalls, isNot(contains('setGateLanguage')));
     });
