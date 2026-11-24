@@ -19,6 +19,13 @@ abstract class INativeBridge {
   /// Dispatches the Android system intent to open Accessibility Settings.
   Future<bool> openAccessibilitySettings();
 
+  /// Dispatches the Android system intent to open the Application Details Settings screen.
+  Future<bool> openAppSettings();
+
+  /// Queries the Android operating system directly for runtime Camera permission status
+  /// without presenting a permission prompt.
+  Future<String> checkCameraPermission();
+
   /// Atomically reads and resets the transient "open_challenge" flag set by the native overlay.
   Future<bool> consumeChallengeRequest();
 
@@ -150,6 +157,45 @@ class NativeBridge implements INativeBridge {
             'Unexpected error calling ${ChannelConstants.methodOpenAccessibilitySettings}: $e',
         cause: e,
       );
+    }
+  }
+
+  @override
+  Future<bool> openAppSettings() async {
+    try {
+      final result = await _channel.invokeMethod<bool>(
+        ChannelConstants.methodOpenAppSettings,
+      );
+      return result ?? true;
+    } on PlatformException catch (e) {
+      throw _handlePlatformException(
+        ChannelConstants.methodOpenAppSettings,
+        e,
+      );
+    } on MissingPluginException {
+      // Graceful fallback to opening accessibility settings if platform method not implemented
+      return openAccessibilitySettings();
+    } catch (e) {
+      if (e is NativeBridgeException) rethrow;
+      throw NativeBridgeException(
+        message:
+            'Unexpected error calling ${ChannelConstants.methodOpenAppSettings}: $e',
+        cause: e,
+      );
+    }
+  }
+
+  @override
+  Future<String> checkCameraPermission() async {
+    try {
+      final result = await _channel.invokeMethod<String>(
+        ChannelConstants.methodCheckCameraPermission,
+      );
+      return result ?? 'unknown';
+    } on MissingPluginException {
+      return 'unknown';
+    } catch (_) {
+      return 'unknown';
     }
   }
 

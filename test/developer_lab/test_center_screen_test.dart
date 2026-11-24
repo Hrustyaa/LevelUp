@@ -75,7 +75,7 @@ void main() {
       expect(find.text('BLOCKED'), findsAtLeastNWidgets(1));
       expect(find.text('NOT RUN'), findsAtLeastNWidgets(1));
 
-      // Verify all 8 backend modules exist
+      // Verify all 9 backend modules exist
       expect(find.text('Native Bridge'), findsAtLeastNWidgets(1));
       expect(find.text('Focus Engine'), findsAtLeastNWidgets(1));
       expect(find.text('Challenge Engine'), findsAtLeastNWidgets(1));
@@ -84,6 +84,7 @@ void main() {
       expect(find.text('Access Engine'), findsAtLeastNWidgets(1));
       expect(find.text('Local Database'), findsAtLeastNWidgets(1));
       expect(find.text('Coordinator'), findsAtLeastNWidgets(1));
+      expect(find.text('Settings Engine'), findsAtLeastNWidgets(1));
 
       controller.dispose();
     });

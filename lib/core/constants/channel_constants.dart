@@ -8,6 +8,8 @@ abstract final class ChannelConstants {
   static const String methodSetTarget = 'setTarget';
   static const String methodSetEnabled = 'setEnabled';
   static const String methodOpenAccessibilitySettings = 'openAccessibilitySettings';
+  static const String methodOpenAppSettings = 'openAppSettings';
+  static const String methodCheckCameraPermission = 'checkCameraPermission';
   static const String methodConsumeChallengeRequest = 'consumeChallengeRequest';
   static const String methodGrantAccess = 'grantAccess';
   static const String methodResetAccess = 'resetAccess';

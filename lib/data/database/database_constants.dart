@@ -4,11 +4,12 @@ abstract final class DatabaseConstants {
   static const String databaseFileName = 'levelup.db';
 
   /// Current schema version.
-  static const int currentSchemaVersion = 1;
+  static const int currentSchemaVersion = 2;
 
   // Table names
   static const String tableWorkoutSessions = 'workout_sessions';
   static const String tableAccessAttempts = 'access_attempts';
+  static const String tableAppSettings = 'app_settings';
 
   // Columns: workout_sessions
   static const String colSessionId = 'session_id';
@@ -28,6 +29,11 @@ abstract final class DatabaseConstants {
   static const String colConfirmedAt = 'confirmed_at';
   static const String colUnlockUntil = 'unlock_until';
   static const String colFailureReason = 'failure_reason';
+
+  // Columns: app_settings
+  static const String colSettingsKey = 'key';
+  static const String colSettingsValue = 'value';
+  static const String colSettingsUpdatedAt = 'updated_at';
 
   // DDL statements
   static const String createTableWorkoutSessions = '''
@@ -66,5 +72,13 @@ abstract final class DatabaseConstants {
   static const String createIndexAccessAttemptsAttemptedAt = '''
     CREATE INDEX IF NOT EXISTS idx_access_attempts_attempted_at
     ON $tableAccessAttempts ($colAttemptedAt DESC);
+  ''';
+
+  static const String createTableAppSettings = '''
+    CREATE TABLE IF NOT EXISTS $tableAppSettings (
+      $colSettingsKey TEXT PRIMARY KEY NOT NULL,
+      $colSettingsValue TEXT NOT NULL,
+      $colSettingsUpdatedAt INTEGER NOT NULL
+    );
   ''';
 }

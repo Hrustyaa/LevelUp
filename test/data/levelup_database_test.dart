@@ -104,14 +104,23 @@ void main() {
     });
 
     test('20. database version migration retains existing user data', () async {
-      // Step 1: Create a database at Version 1 and insert data
-      final dbManager = LevelUpDatabase(
-        databaseFactory: databaseFactoryFfi,
-        customPath: dbPath,
+      // Step 1: Explicitly create a genuine Version 1 database fixture
+      final v1Db = await databaseFactoryFfi.openDatabase(
+        dbPath,
+        options: OpenDatabaseOptions(
+          version: 1,
+          onCreate: (db, version) async {
+            final batch = db.batch();
+            batch.execute(DatabaseConstants.createTableWorkoutSessions);
+            batch.execute(DatabaseConstants.createIndexWorkoutSessionsCompletedAt);
+            batch.execute(DatabaseConstants.createTableAccessAttempts);
+            batch.execute(DatabaseConstants.createIndexAccessAttemptsAttemptedAt);
+            await batch.commit(noResult: true);
+          },
+        ),
       );
-      final db = await dbManager.database;
 
-      await db.insert(
+      await v1Db.insert(
         DatabaseConstants.tableWorkoutSessions,
         {
           DatabaseConstants.colSessionId: 'session_pre_migration',
@@ -124,26 +133,17 @@ void main() {
           DatabaseConstants.colCompletedAt: 1700000000000,
         },
       );
-      await dbManager.close();
+      await v1Db.close();
 
-      // Step 2: Open with higher version (simulating future v2 upgrade)
-      final v2Db = await databaseFactoryFfi.openDatabase(
-        dbPath,
-        options: OpenDatabaseOptions(
-          version: 2,
-          onUpgrade: (db, oldVersion, newVersion) async {
-            if (oldVersion < 2) {
-              // Simulated v2 non-destructive migration: add new column
-              await db.execute(
-                'ALTER TABLE ${DatabaseConstants.tableWorkoutSessions} '
-                'ADD COLUMN notes TEXT;',
-              );
-            }
-          },
-        ),
+      // Step 2: Open with LevelUpDatabase at current Version 2 (triggers non-destructive migration)
+      final v2Manager = LevelUpDatabase(
+        databaseFactory: databaseFactoryFfi,
+        customPath: dbPath,
       );
+      final v2Db = await v2Manager.database;
+      expect(await v2Db.getVersion(), equals(2));
 
-      // Step 3: Verify existing data was preserved through migration
+      // Step 3: Verify existing v1 workout data was completely preserved through migration
       final rows = await v2Db.query(
         DatabaseConstants.tableWorkoutSessions,
         where: '${DatabaseConstants.colSessionId} = ?',
@@ -152,21 +152,38 @@ void main() {
       expect(rows.length, equals(1));
       expect(rows.first[DatabaseConstants.colSessionId], equals('session_pre_migration'));
 
-      // Verify the new v2 column is available
-      await v2Db.update(
-        DatabaseConstants.tableWorkoutSessions,
-        {'notes': 'migrated_successfully'},
-        where: '${DatabaseConstants.colSessionId} = ?',
-        whereArgs: ['session_pre_migration'],
+      // Step 4: Verify the newly migrated v2 app_settings table is operational
+      await v2Db.insert(
+        DatabaseConstants.tableAppSettings,
+        {
+          DatabaseConstants.colSettingsKey: 'test_key',
+          DatabaseConstants.colSettingsValue: '{"migrated": true}',
+          DatabaseConstants.colSettingsUpdatedAt: 1700000000000,
+        },
       );
-      final updated = await v2Db.query(
-        DatabaseConstants.tableWorkoutSessions,
-        where: '${DatabaseConstants.colSessionId} = ?',
-        whereArgs: ['session_pre_migration'],
+      final settingsRows = await v2Db.query(
+        DatabaseConstants.tableAppSettings,
+        where: '${DatabaseConstants.colSettingsKey} = ?',
+        whereArgs: ['test_key'],
       );
-      expect(updated.first['notes'], equals('migrated_successfully'));
+      expect(settingsRows.length, equals(1));
+      expect(settingsRows.first[DatabaseConstants.colSettingsValue], equals('{"migrated": true}'));
 
-      await v2Db.close();
+      // Step 5: Verify reopening preserves both v1 and v2 records
+      await v2Manager.close();
+      final v2Reopen = LevelUpDatabase(
+        databaseFactory: databaseFactoryFfi,
+        customPath: dbPath,
+      );
+      final reopenedDb = await v2Reopen.database;
+      expect(await reopenedDb.getVersion(), equals(2));
+      final reopenedWorkouts = await reopenedDb.query(
+        DatabaseConstants.tableWorkoutSessions,
+        where: '${DatabaseConstants.colSessionId} = ?',
+        whereArgs: ['session_pre_migration'],
+      );
+      expect(reopenedWorkouts.length, equals(1));
+      await v2Reopen.close();
     });
 
     test('enforces SQL CHECK constraints on direct database inserts', () async {

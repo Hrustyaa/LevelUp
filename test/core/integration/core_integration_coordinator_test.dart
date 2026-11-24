@@ -129,6 +129,18 @@ class FakeCoordinatorBridge implements INativeBridge {
 
   @override
   Future<bool> isAvailable() async => true;
+
+  @override
+  Future<bool> openAppSettings() async {
+    callLog.add('openAppSettings');
+    return true;
+  }
+
+  @override
+  Future<String> checkCameraPermission() async {
+    callLog.add('checkCameraPermission');
+    return 'granted';
+  }
 }
 
 /// Fake repository simulating an unrecoverable SQLite write failure.

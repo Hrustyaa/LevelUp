@@ -214,3 +214,20 @@ class FocusViewModel {
 2. **Calendar Time**: Unlock time is strictly calendar time (`unlock_until` timestamp), not active foreground usage time.
 3. **Fail-Open Security**: If native communication fails, the app must not trap the user or freeze the OS navigation.
 4. **Channel Name Immutability**: The channel name `levelup_test/control` and method identifiers must not be modified.
+
+---
+
+## 7. Module 08 — Settings & Permissions Engine Contract
+
+Module 08 (`ISettingsService`) provides reactive application configuration and OS permission coordination:
+
+### Core Contract
+- **Contract Interface:** `ISettingsService` (`lib/features/settings/application/settings_service.dart`)
+- **State Model:** `SettingsState` (`settings`, `permissions`, `activeTargetPackage`, `isFocusEnabled`)
+- **Persistence:** `SqliteSettingsRepository` storing to `app_settings` table in `LevelUpDatabase`
+- **Permissions Monitored:**
+  - Android Accessibility Service (`isAccessibilityGranted` via `INativeBridge.getState()`)
+  - Device Camera (`CameraPermissionStatus` via `ICameraPermissionChecker` / `camera` plugin)
+- **Lifecycle Integration:** Dispatches `refresh()` on app resume (`AppLifecycleState.resumed`) to detect OS settings changes or external revocations.
+- **Authority Preservation:** SettingsService never issues native access grants or bypasses `FocusService` authority. Target switching delegates to `focusService.selectTargetApp()`.
+

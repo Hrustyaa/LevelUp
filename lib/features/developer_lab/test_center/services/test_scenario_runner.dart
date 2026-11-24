@@ -15,6 +15,11 @@ import '../../../../features/challenge/data/challenge_catalog.dart';
 import '../../../../features/focus/application/focus_service.dart';
 import '../../../../features/pose_detection/application/squat_counter.dart';
 import '../../../../features/pose_detection/application/squat_geometry.dart';
+import '../../../../features/settings/application/camera_permission_checker.dart';
+import '../../../../features/settings/application/settings_service.dart';
+import '../../../../features/settings/data/settings_repository.dart';
+import '../../../../features/settings/models/app_settings.dart';
+import '../../../../features/settings/models/camera_permission_status.dart';
 import '../../../../models/access_attempt_state.dart';
 import '../../../../services/access_service.dart';
 import '../../di/dev_lab_scope.dart';
@@ -668,6 +673,180 @@ class TestScenarioRunner with ChangeNotifier {
       ),
 
       // -----------------------------------------------------------------------
+      // MODULE 08 — SETTINGS & PERMISSIONS ENGINE
+      // -----------------------------------------------------------------------
+      TestScenario(
+        id: 'M08_PROBE_CURRENT_SETTINGS',
+        moduleId: BackendModuleId.settingsEngine,
+        title: 'Authoritative Settings & Permissions Probe',
+        description: 'Queries SettingsService for live settings snapshot and hardware permission state.',
+        executionType: TestExecutionType.realDeviceProbe,
+        action: () async {
+          final state = await _controller.settingsService.refresh();
+          return TestScenarioResult.pass(
+            'Target: ${state.activeTargetPackage}, Duration: ${state.settings.defaultUnlockDurationSeconds}s, '
+            'A11y: ${state.isAccessibilityGranted}, Camera: ${state.cameraStatus.label}',
+          );
+        },
+      ),
+      TestScenario(
+        id: 'M08_ISOLATED_DEFAULT_INIT',
+        moduleId: BackendModuleId.settingsEngine,
+        title: 'Deterministic Settings Defaults Initialization',
+        description: 'Verifies standard defaults (YouTube, 300s, emergency pause enabled, sound enabled).',
+        executionType: TestExecutionType.isolatedScenario,
+        action: () async {
+          final repo = InMemorySettingsRepository();
+          final bridge = SimulationBridge();
+          final focus = FocusService(bridge: bridge);
+          final service = SettingsService(
+            repository: repo,
+            focusService: focus,
+            nativeBridge: bridge,
+            cameraPermissionChecker: MockCameraPermissionChecker(),
+          );
+
+          try {
+            final state = await service.initialize();
+            if (state.settings.defaultTargetPackage != ChannelConstants.targetYouTube ||
+                state.settings.defaultUnlockDurationSeconds != 300 ||
+                !state.settings.emergencyPauseAllowed ||
+                !state.settings.soundFeedbackEnabled) {
+              return TestScenarioResult.fail('Settings defaults mismatch: ${state.settings}');
+            }
+            return TestScenarioResult.pass('All standard defaults verified.');
+          } finally {
+            service.dispose();
+            focus.dispose();
+          }
+        },
+      ),
+      TestScenario(
+        id: 'M08_ISOLATED_CRUD_PERSISTENCE',
+        moduleId: BackendModuleId.settingsEngine,
+        title: 'SQLite App Settings Persistence & Reload',
+        description: 'Persists custom preferences to an isolated SQLite DB and verifies reload across instances.',
+        executionType: TestExecutionType.isolatedScenario,
+        action: () async {
+          final tempDbName = 'test_settings_${DateTime.now().microsecondsSinceEpoch}.db';
+          final tempDb = LevelUpDatabase(
+            databaseFactory: _controller.database.factory,
+            customPath: tempDbName,
+          );
+
+          try {
+            final repo1 = SqliteSettingsRepository(databaseManager: tempDb);
+            const customSettings = AppSettings(
+              defaultTargetPackage: ChannelConstants.targetInstagram,
+              defaultUnlockDurationSeconds: 300,
+              emergencyPauseAllowed: true,
+              soundFeedbackEnabled: false,
+              diagnosticLoggingEnabled: false,
+            );
+            await repo1.saveSettings(customSettings);
+
+            final repo2 = SqliteSettingsRepository(databaseManager: tempDb);
+            final loaded = await repo2.loadSettings();
+
+            if (loaded != customSettings) {
+              return TestScenarioResult.fail('Loaded settings did not match persisted settings: $loaded');
+            }
+            return TestScenarioResult.pass('Settings persisted and reloaded cleanly from SQLite.');
+          } finally {
+            await tempDb.close();
+          }
+        },
+      ),
+      TestScenario(
+        id: 'M08_ISOLATED_INVALID_SETTINGS_REJECTION',
+        moduleId: BackendModuleId.settingsEngine,
+        title: 'Domain Validation & Invariant Protection',
+        description: 'Verifies rejection of unsupported target packages and invalid durations.',
+        executionType: TestExecutionType.isolatedScenario,
+        action: () async {
+          const invalidTarget = AppSettings(
+            defaultTargetPackage: 'com.android.settings',
+            defaultUnlockDurationSeconds: 300,
+            emergencyPauseAllowed: true,
+            soundFeedbackEnabled: true,
+            diagnosticLoggingEnabled: true,
+          );
+
+          try {
+            invalidTarget.validate();
+            return TestScenarioResult.fail('Did not reject invalid package "com.android.settings".');
+          } catch (_) {}
+
+          const invalidDuration = AppSettings(
+            defaultTargetPackage: ChannelConstants.targetYouTube,
+            defaultUnlockDurationSeconds: 15, // < 60s
+            emergencyPauseAllowed: true,
+            soundFeedbackEnabled: true,
+            diagnosticLoggingEnabled: true,
+          );
+
+          try {
+            invalidDuration.validate();
+            return TestScenarioResult.fail('Did not reject non-300s duration.');
+          } catch (_) {}
+
+          return TestScenarioResult.pass('All invalid settings strictly rejected.');
+        },
+      ),
+      TestScenario(
+        id: 'M08_ISOLATED_STORAGE_FAILURE_RECOVERY',
+        moduleId: BackendModuleId.settingsEngine,
+        title: 'Graceful Storage Failure Recovery',
+        description: 'Verifies fallback to deterministic defaults when storage throws or is corrupted.',
+        executionType: TestExecutionType.isolatedScenario,
+        action: () async {
+          final faultyRepo = InMemorySettingsRepository()..shouldFailLoad = true;
+          final loaded = await faultyRepo.loadSettings();
+          if (loaded != AppSettings.defaults()) {
+            return TestScenarioResult.fail('Faulty repository did not fall back to defaults: $loaded');
+          }
+          return TestScenarioResult.pass('Recovered gracefully from storage failure with defaults.');
+        },
+      ),
+      TestScenario(
+        id: 'M08_ISOLATED_PERMISSION_REVOCATION',
+        moduleId: BackendModuleId.settingsEngine,
+        title: 'External Permission Revocation Detection',
+        description: 'Simulates OS settings permission revocation and verifies reactive state update.',
+        executionType: TestExecutionType.isolatedScenario,
+        action: () async {
+          final cameraChecker = MockCameraPermissionChecker(status: CameraPermissionStatus.granted);
+          final bridge = SimulationBridge();
+          final focus = FocusService(bridge: bridge);
+          final service = SettingsService(
+            repository: InMemorySettingsRepository(),
+            focusService: focus,
+            nativeBridge: bridge,
+            cameraPermissionChecker: cameraChecker,
+          );
+
+          try {
+            var state = await service.initialize();
+            if (!state.isReadyForChallenges) {
+              return TestScenarioResult.fail('Initial state was not ready for challenges.');
+            }
+
+            // Simulate user revoking camera in Android Settings
+            cameraChecker.revokePermission();
+            state = await service.refresh();
+
+            if (state.isCameraGranted || state.isReadyForChallenges) {
+              return TestScenarioResult.fail('Service failed to detect revoked camera permission.');
+            }
+            return TestScenarioResult.pass('Externally revoked permission successfully detected on refresh.');
+          } finally {
+            service.dispose();
+            focus.dispose();
+          }
+        },
+      ),
+
+      // -----------------------------------------------------------------------
       // CATEGORY D — MANUAL DEVICE CHECKLIST (Physical Verification Protocol)
       // -----------------------------------------------------------------------
       TestScenario(
@@ -696,6 +875,13 @@ class TestScenarioRunner with ChangeNotifier {
         moduleId: BackendModuleId.accessEngine,
         title: 'Authoritative 300-Second Access Grant',
         description: 'Completing 5 squats allows target app use for exactly 300 seconds before re-blocking.',
+        executionType: TestExecutionType.manualChecklist,
+      ),
+      TestScenario(
+        id: 'MANUAL_SETTINGS_NAVIGATION',
+        moduleId: BackendModuleId.settingsEngine,
+        title: 'Safe Navigation to Android System Settings',
+        description: 'Tapping Open Accessibility or App Settings dispatches system intent without app crash.',
         executionType: TestExecutionType.manualChecklist,
       ),
     ];

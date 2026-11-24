@@ -96,16 +96,21 @@ class LevelUpDatabase {
     batch.execute(DatabaseConstants.createIndexWorkoutSessionsCompletedAt);
     batch.execute(DatabaseConstants.createTableAccessAttempts);
     batch.execute(DatabaseConstants.createIndexAccessAttemptsAttemptedAt);
+    batch.execute(DatabaseConstants.createTableAppSettings);
     await batch.commit(noResult: true);
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     try {
       // Incremental non-destructive migrations.
-      // Version 1 is the baseline MVP schema.
-      // Future versions (2, 3...) will apply ALTER TABLE or new CREATE TABLE statements here.
+      // Version 1: baseline schema (workout_sessions, access_attempts).
+      // Version 2: adds app_settings key-value store (Module 08).
       if (oldVersion < 1) {
         await _onCreate(db, newVersion);
+        return;
+      }
+      if (oldVersion < 2) {
+        await db.execute(DatabaseConstants.createTableAppSettings);
       }
     } catch (e) {
       throw DatabaseMigrationException(

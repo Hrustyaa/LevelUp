@@ -315,6 +315,11 @@ class _SystemHubScreenState extends State<SystemHubScreen> with WidgetsBindingOb
                     'SQLite ACID persistence',
                   ),
                   _moduleHealthRow(
+                    '08 Settings & Permissions',
+                    controller.moduleHealth[BackendModuleId.settingsEngine]!,
+                    'SettingsService & camera/a11y permissions',
+                  ),
+                  _moduleHealthRow(
                     'Integration Coordinator',
                     controller.moduleHealth[BackendModuleId.coordinator]!,
                     'Phase A Headless Coordinator',

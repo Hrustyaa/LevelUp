@@ -106,6 +106,18 @@ class FakeNativeBridge implements INativeBridge {
     );
     return true;
   }
+
+  @override
+  Future<bool> openAppSettings() async {
+    callLog.add('openAppSettings');
+    return true;
+  }
+
+  @override
+  Future<String> checkCameraPermission() async {
+    callLog.add('checkCameraPermission');
+    return 'granted';
+  }
 }
 
 void main() {

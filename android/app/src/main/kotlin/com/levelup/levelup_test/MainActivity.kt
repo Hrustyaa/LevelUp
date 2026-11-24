@@ -57,6 +57,18 @@ class MainActivity : FlutterActivity() {
                         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                         result.success(true)
                     }
+                    "openAppSettings" -> {
+                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = android.net.Uri.fromParts("package", packageName, null)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        startActivity(intent)
+                        result.success(true)
+                    }
+                    "checkCameraPermission" -> {
+                        val granted = checkSelfPermission(android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                        result.success(if (granted) "granted" else "denied")
+                    }
                     "consumeChallengeRequest" -> {
                         val requested = prefs.getBoolean("open_challenge", false)
                         prefs.edit().putBoolean("open_challenge", false).apply()

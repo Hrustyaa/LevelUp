@@ -18,6 +18,7 @@ enum BackendModuleId {
   accessEngine('Access Engine'),
   localDatabase('Local Database'),
   coordinator('Coordinator'),
+  settingsEngine('Settings Engine'),
   developerLab('Developer Lab');
 
   final String title;

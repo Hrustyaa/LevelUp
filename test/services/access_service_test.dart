@@ -95,6 +95,12 @@ class FakeAccessBridge implements INativeBridge {
 
   @override
   Future<bool> isAvailable() async => true;
+
+  @override
+  Future<bool> openAppSettings() async => true;
+
+  @override
+  Future<String> checkCameraPermission() async => 'granted';
 }
 
 void main() {

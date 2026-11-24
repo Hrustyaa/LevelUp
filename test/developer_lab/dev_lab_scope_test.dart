@@ -160,6 +160,10 @@ void main() {
         controller.moduleHealth[BackendModuleId.coordinator],
         equals(ModuleHealthStatus.ready),
       );
+      expect(
+        controller.moduleHealth[BackendModuleId.settingsEngine],
+        equals(ModuleHealthStatus.ready),
+      );
 
       controller.dispose();
     });

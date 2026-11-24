@@ -9,6 +9,10 @@ import '../../../data/repositories/workout_history_repository.dart';
 import '../../../features/challenge/application/challenge_service.dart';
 import '../../../features/challenge/application/workout_session_manager.dart';
 import '../../../features/focus/application/focus_service.dart';
+import '../../../features/settings/application/camera_permission_checker.dart';
+import '../../../features/settings/application/settings_service.dart';
+import '../../../features/settings/data/settings_repository.dart';
+import '../../../features/settings/models/camera_permission_status.dart';
 import '../../../models/native_access_status.dart';
 import '../../../models/native_focus_status.dart';
 import '../../../models/native_permission_status.dart';
@@ -75,6 +79,18 @@ class SimulationBridge implements INativeBridge {
   }
 
   @override
+  Future<bool> openAppSettings() async {
+    callLog.add('openAppSettings');
+    return true;
+  }
+
+  @override
+  Future<String> checkCameraPermission() async {
+    callLog.add('checkCameraPermission');
+    return 'granted';
+  }
+
+  @override
   Future<bool> consumeChallengeRequest() async {
     callLog.add('consumeChallengeRequest');
     final was = challengeRequested;
@@ -129,6 +145,8 @@ class DevLabController extends ChangeNotifier {
   late IWorkoutHistoryRepository workoutHistoryRepository;
   late IAccessAttemptRepository accessAttemptRepository;
   late ICoreIntegrationCoordinator coordinator;
+  late ISettingsRepository settingsRepository;
+  late ISettingsService settingsService;
 
   FocusState? currentFocusState;
   bool isInitializing = true;
@@ -144,6 +162,7 @@ class DevLabController extends ChangeNotifier {
     BackendModuleId.accessEngine: ModuleHealthStatus.notTested,
     BackendModuleId.localDatabase: ModuleHealthStatus.notTested,
     BackendModuleId.coordinator: ModuleHealthStatus.notTested,
+    BackendModuleId.settingsEngine: ModuleHealthStatus.notTested,
   };
 
   DevLabController({
@@ -197,6 +216,17 @@ class DevLabController extends ChangeNotifier {
       accessService: accessService,
       workoutHistoryRepository: workoutHistoryRepository,
       accessAttemptRepository: accessAttemptRepository,
+    );
+
+    settingsRepository = SqliteSettingsRepository(databaseManager: database);
+    final cameraChecker = _executionMode == DevExecutionMode.realDevice
+        ? DefaultCameraPermissionChecker(nativeBridge: nativeBridge)
+        : MockCameraPermissionChecker(status: CameraPermissionStatus.granted);
+    settingsService = SettingsService(
+      repository: settingsRepository,
+      focusService: focusService,
+      nativeBridge: nativeBridge,
+      cameraPermissionChecker: cameraChecker,
     );
 
     logService.info(
@@ -277,6 +307,15 @@ class DevLabController extends ChangeNotifier {
       } catch (e) {
         moduleHealth[BackendModuleId.coordinator] = ModuleHealthStatus.failed;
       }
+
+      // 7. Settings & Permissions Engine
+      try {
+        final sState = await settingsService.initialize();
+        moduleHealth[BackendModuleId.settingsEngine] =
+            sState.isReady ? ModuleHealthStatus.ready : ModuleHealthStatus.ready;
+      } catch (e) {
+        moduleHealth[BackendModuleId.settingsEngine] = ModuleHealthStatus.failed;
+      }
     } catch (e) {
       initError = e.toString();
       logService.error(BackendModuleId.developerLab, 'Initialization error: $e');
@@ -314,6 +353,7 @@ class DevLabController extends ChangeNotifier {
     sessionManager.dispose();
     focusService.dispose();
     accessService.dispose();
+    settingsService.dispose();
     database.close();
   }
 
