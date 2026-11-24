@@ -46,6 +46,9 @@ migrate_working_dir/
 
 # Android Build Outputs & Caches
 android/.gradle/
+android/.kotlin/
+*.apk
+*.aab
 android/captures/
 android/app/build/
 android/app/debug/
