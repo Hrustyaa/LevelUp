@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'app/di/app_scope.dart';
 import 'data/android_app_catalog.dart';
 import 'data/android_usage_gateway.dart';
 import 'data/dashboard_data.dart';
@@ -22,9 +23,15 @@ import 'screens/manage_apps_screen.dart';
 import 'test_kit/challenge_screen.dart';
 import 'test_kit/test_kit_screen.dart' show testApps;
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const LevelUpIntroDemo());
+  final scope = AppScope.production();
+  try {
+    await scope.initialize();
+  } catch (error) {
+    debugPrint('AppScope initialization failed: $error');
+  }
+  runApp(LevelUpIntroDemo(scope: scope, ownsScope: true));
 }
 
 abstract final class LevelUpColors {
@@ -36,12 +43,28 @@ abstract final class LevelUpColors {
   static const border = Color(0xFF293334);
 }
 
-class LevelUpIntroDemo extends StatelessWidget {
-  const LevelUpIntroDemo({super.key});
+class LevelUpIntroDemo extends StatefulWidget {
+  final AppScope? scope;
+  final bool ownsScope;
+
+  const LevelUpIntroDemo({super.key, this.scope, this.ownsScope = false});
+
+  @override
+  State<LevelUpIntroDemo> createState() => _LevelUpIntroDemoState();
+}
+
+class _LevelUpIntroDemoState extends State<LevelUpIntroDemo> {
+  @override
+  void dispose() {
+    if (widget.ownsScope) {
+      widget.scope?.dispose();
+    }
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    final app = MaterialApp(
       title: 'LevelUp',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -60,8 +83,13 @@ class LevelUpIntroDemo extends StatelessWidget {
           displayColor: LevelUpColors.text,
         ),
       ),
-      home: const LevelUpSplashScreen(nextPage: _WelcomeFlow()),
+      home: LevelUpSplashScreen(nextPage: _WelcomeFlow(scope: widget.scope)),
     );
+
+    if (widget.scope != null) {
+      return AppScopeProvider(scope: widget.scope!, child: app);
+    }
+    return app;
   }
 }
 
@@ -95,7 +123,9 @@ LevelUpLanguage _toLevelUpLanguage(DashboardLanguage language) =>
     };
 
 class _WelcomeFlow extends StatefulWidget {
-  const _WelcomeFlow();
+  final AppScope? scope;
+
+  const _WelcomeFlow({this.scope});
 
   @override
   State<_WelcomeFlow> createState() => _WelcomeFlowState();
@@ -118,6 +148,30 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
   List<SelectableApp>? _loadedCatalog;
   bool _appSelectionOpen = false;
   bool _challengeOpen = false;
+
+  AppScope? get _scope => widget.scope ?? AppScope.maybeOf(context);
+
+  LevelUpPermissionGateway get _permissionGateway =>
+      _scope?.permissionGateway ?? const AndroidPermissionGateway();
+
+  DashboardFocusGateway get _focusGateway =>
+      _scope?.focusGateway ??
+      switch (_language) {
+        LevelUpLanguage.en => const ExistingFocusGateway(
+          notificationLanguage: DashboardLanguage.en,
+        ),
+        LevelUpLanguage.ru => const ExistingFocusGateway(
+          notificationLanguage: DashboardLanguage.ru,
+        ),
+        LevelUpLanguage.kk => const ExistingFocusGateway(
+          notificationLanguage: DashboardLanguage.kk,
+        ),
+      };
+
+  AppLoader get _loadApps =>
+      _scope != null
+          ? _scope!.appCatalog.loadSupportedApps
+          : const AndroidAppCatalog().load;
 
   Future<_AppState> _loadInitialState() async {
     try {
@@ -196,9 +250,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
   Future<void> _ensureCatalogLoaded({bool forceRefresh = false}) async {
     if (_loadedCatalog != null && !forceRefresh) return;
     try {
-      final apps = await const AndroidAppCatalog().load(
-        forceRefresh: forceRefresh,
-      );
+      final apps = await _loadApps();
       if (!mounted || identical(apps, _loadedCatalog)) return;
       setState(() {
         _loadedCatalog = apps;
@@ -218,6 +270,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _scope?.refresh();
       _checkChallenge();
       if (_onboardingCompleted) {
         _ensureCatalogLoaded(forceRefresh: true);
@@ -226,6 +279,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
   }
 
   Future<void> _syncGateLanguage(LevelUpLanguage language) async {
+    if (_scope != null) return; // MainActivity.kt does not register setGateLanguage
     try {
       await ExistingFocusGateway.channel.invokeMethod<void>('setGateLanguage', {
         'language': language.name,
@@ -242,6 +296,16 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
   Future<void> _checkChallenge() async {
     if (!mounted || !_onboardingCompleted || _challengeOpen) return;
     _challengeOpen = true;
+
+    // Challenge Safety (Phase I2A):
+    // If running in production with AppScope, real ML Kit camera pose verification
+    // will be connected in Phase I2B. Do not grant access or invoke test-kit challenge.
+    if (_scope != null) {
+      _challengeOpen = false;
+      return;
+    }
+
+    // Fallback path for legacy preview tests
     const gateway = ExistingFocusGateway();
     FocusChallengeRequest? request;
     try {
@@ -318,7 +382,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
           builder: (routeContext) => LevelUpAppSelectionScreen(
             language: language,
             initialSelectedIds: _appSelectionDraft,
-            loadApps: const AndroidAppCatalog().load,
+            loadApps: _loadApps,
             onSelectionChanged: (ids) => _appSelectionDraft = ids,
             onContinue: (ids) => _openFocusSetup(routeContext, language, ids),
             onSkip: () => _openFocusSetup(routeContext, language, const {}),
@@ -345,7 +409,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
 
     List<SelectableApp> installed;
     try {
-      installed = await const AndroidAppCatalog().load();
+      installed = await _loadApps();
     } catch (_) {
       installed = const [];
     }
@@ -404,7 +468,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
       MaterialPageRoute(
         builder: (permContext) => LevelUpPermissionsScreen(
           language: language,
-          gateway: const AndroidPermissionGateway(),
+          gateway: _permissionGateway,
           onBack: () => Navigator.of(permContext).pop(),
           onFinish: (_) => _openHome(permContext, language, draft),
         ),
@@ -454,22 +518,49 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
     };
   }
 
-  ExistingFocusGateway get _focusGateway => switch (_language) {
-    LevelUpLanguage.en => const ExistingFocusGateway(
-      notificationLanguage: DashboardLanguage.en,
-    ),
-    LevelUpLanguage.ru => const ExistingFocusGateway(
-      notificationLanguage: DashboardLanguage.ru,
-    ),
-    LevelUpLanguage.kk => const ExistingFocusGateway(
-      notificationLanguage: DashboardLanguage.kk,
-    ),
-  };
+  Future<DashboardInsights> _loadDashboardInsights() {
+    final selection = _focusSetupDraft?.packageIds ?? _appSelectionDraft;
+    if (_scope != null) {
+      return _scope!.insightsAdapter.loadInsights(selection);
+    }
+    return const AndroidUsageGateway().read(selection);
+  }
 
-  Future<DashboardInsights> _loadDashboardInsights() =>
-      const AndroidUsageGateway().read(
-        _focusSetupDraft?.packageIds ?? _appSelectionDraft,
-      );
+  Future<void> _handleMovementNotice() async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: LevelUpColors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: LevelUpColors.border),
+        ),
+        title: Text(switch (_language) {
+          LevelUpLanguage.en => 'Movement Challenge',
+          LevelUpLanguage.ru => 'Упражнение для разблокировки',
+          LevelUpLanguage.kk => 'Қозғалыс тапсырмасы',
+        }, style: const TextStyle(color: LevelUpColors.text, fontSize: 18)),
+        content: Text(switch (_language) {
+          LevelUpLanguage.en =>
+            'Real ML Kit camera pose verification is being connected in Phase I2B. Direct access grants from UI are disabled in Phase I2A for safety.',
+          LevelUpLanguage.ru =>
+            'Проверка упражнений через камеру и ML Kit подключается в Phase I2B. Прямая разблокировка из UI отключена в целях безопасности.',
+          LevelUpLanguage.kk =>
+            'Камера арқылы ML Kit тексеруі Phase I2B кезеңінде қосылады. Қауіпсіздік үшін интерфейстен тікелей рұқсат беру өшірілген.',
+        }, style: const TextStyle(color: LevelUpColors.muted, fontSize: 14)),
+        actions: [
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: LevelUpColors.accent,
+              foregroundColor: LevelUpColors.background,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK', style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildHomeScreen() {
     return LevelUpHomeScreen(
@@ -500,7 +591,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
         _saveWelcomeLanguage(lang);
         setState(() => _language = lang);
       },
-      onMovement: null,
+      onMovement: _handleMovementNotice,
       loadInsights: _loadDashboardInsights,
     );
   }
@@ -512,7 +603,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
           language: _toDashboardLanguage(_language),
           initialSelectedIds:
               _focusSetupDraft?.packageIds ?? _appSelectionDraft,
-          loadApps: () => const AndroidAppCatalog().load(forceRefresh: true),
+          loadApps: () => _loadApps(),
           onSave: (selectedIds) => _saveFocusDraft(
             (_focusSetupDraft ??
                     FocusSetupDraft(packageIds: _appSelectionDraft))
@@ -531,8 +622,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
     final selection = draft.packageIds;
     final previousSelection =
         _focusSetupDraft?.packageIds ?? _appSelectionDraft;
-    if ((verifyTarget || !setEquals(previousSelection, selection)) &&
-        await const AndroidPermissionGateway().isAvailable()) {
+    if ((verifyTarget || !setEquals(previousSelection, selection))) {
       final focus = await _focusGateway.read();
       if (focus.targets.any((id) => !selection.contains(id))) {
         await _focusGateway.disable();
@@ -565,12 +655,15 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
   }
 
   Future<void> _openAppPermissions() async {
+    final openSettings = _scope != null
+        ? _scope!.permissionGateway.openPermissionSettings
+        : const AndroidPermissionGateway().openPermissionSettings;
+
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => AppPermissionsScreen(
-          gateway: const AndroidPermissionGateway(),
-          openPermissionSettings:
-              const AndroidPermissionGateway().openPermissionSettings,
+          gateway: _permissionGateway,
+          openPermissionSettings: openSettings,
           language: _toDashboardLanguage(_language),
         ),
       ),
@@ -580,7 +673,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
   Future<void> _handleEnableFocus() async {
     final Map<LevelUpPermission, PermissionState> states;
     try {
-      states = await const AndroidPermissionGateway().read();
+      states = await _permissionGateway.read();
     } on MissingPluginException {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -596,6 +689,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
       );
       return;
     }
+
     final accessGranted =
         states[LevelUpPermission.accessibility] == PermissionState.granted;
     if (!accessGranted) {
@@ -649,7 +743,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
     }
 
     final selectedIds = _focusSetupDraft?.packageIds ?? _appSelectionDraft;
-    final apps = await const AndroidAppCatalog().load(forceRefresh: true);
+    final apps = await _loadApps();
     if (!mounted) return;
     final eligible = apps
         .where((app) => selectedIds.contains(app.packageId))
@@ -730,8 +824,66 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
     super.dispose();
   }
 
+  Future<void> _retryInitialization() async {
+    final scope = _scope;
+    if (scope == null) return;
+    try {
+      await scope.initialize();
+    } catch (_) {}
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final initError = _scope?.initializationError;
+    if (initError != null) {
+      return Scaffold(
+        backgroundColor: LevelUpColors.background,
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.error_outline_rounded,
+                    color: LevelUpColors.accent,
+                    size: 40,
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Core initialization failed',
+                    style: TextStyle(
+                      color: LevelUpColors.text,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '$initError',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: LevelUpColors.muted,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton(
+                    onPressed: _retryInitialization,
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     return FutureBuilder<_AppState>(
       future: _initialState,
       builder: (context, snapshot) {
