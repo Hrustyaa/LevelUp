@@ -13,8 +13,11 @@ import '../theme/dev_lab_theme.dart';
 import '../widgets/diagnostic_card.dart';
 import '../widgets/live_event_log_view.dart';
 import '../widgets/status_badge.dart';
+import 'history_database_screen.dart';
 import 'live_challenge_screen.dart';
 import 'preflight_focus_screen.dart';
+import 'test_center_screen.dart';
+import 'workout_result_screen.dart';
 
 /// Screen 1 — Developer Lab System Hub: Full real-mode health & state inspection.
 class SystemHubScreen extends StatefulWidget {
@@ -322,7 +325,7 @@ class _SystemHubScreenState extends State<SystemHubScreen> with WidgetsBindingOb
 
             const SizedBox(height: 10),
 
-            // Navigation Actions to Screen 2 and Screen 3
+            // Navigation Actions to Screens 2-6
             Row(
               children: [
                 Expanded(
@@ -349,6 +352,47 @@ class _SystemHubScreenState extends State<SystemHubScreen> with WidgetsBindingOb
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.assignment_outlined, size: 18),
+                    label: const Text('Workout Result'),
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const WorkoutResultScreen()),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.storage_outlined, size: 18),
+                    label: const Text('History & DB'),
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const HistoryDatabaseScreen()),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.science_outlined, size: 18, color: DevLabTheme.accent),
+                label: const Text('Diagnostics & Test Center', style: TextStyle(color: DevLabTheme.accent)),
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const TestCenterScreen()),
+                  );
+                },
+              ),
             ),
 
             const SizedBox(height: 14),

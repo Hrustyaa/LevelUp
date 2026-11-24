@@ -18,6 +18,7 @@ abstract final class DevLabTheme {
   static const Color statusError = Color(0xFFEF5350);
   static const Color statusNeutral = Color(0xFF85919A);
   static const Color statusSpecial = Color(0xFFAB47BC);
+  static const Color statusInfo = Color(0xFF5B9AFA);
 
   /// Builds the complete Developer Lab theme data.
   static ThemeData get theme {

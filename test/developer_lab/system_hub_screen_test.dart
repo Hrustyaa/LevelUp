@@ -87,9 +87,12 @@ void main() {
     expect(find.text('07 Local Database'), findsOneWidget);
     expect(find.text('Integration Coordinator'), findsOneWidget);
 
-    // Verify Navigation Actions
+    // Verify Navigation Actions for all screens
     expect(find.text('Preflight & Focus'), findsOneWidget);
     expect(find.text('Live Challenge'), findsOneWidget);
+    expect(find.text('Workout Result'), findsOneWidget);
+    expect(find.text('History & DB'), findsOneWidget);
+    expect(find.text('Diagnostics & Test Center'), findsOneWidget);
 
     controller.dispose();
   });

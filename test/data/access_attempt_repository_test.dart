@@ -406,5 +406,25 @@ void main() {
         expect(r.state, equals(AccessAttemptState.prepared));
       }
     });
+
+    test('getRecentAttempts returns attempts in descending order of attemptedAt', () async {
+      await repository.createAttemptIfAbsent(
+        sessionId: 'session_old',
+        targetPackage: ChannelConstants.targetYouTube,
+        durationSeconds: 300,
+        attemptedAt: fixedTime.subtract(const Duration(hours: 2)),
+      );
+      await repository.createAttemptIfAbsent(
+        sessionId: 'session_new',
+        targetPackage: ChannelConstants.targetInstagram,
+        durationSeconds: 300,
+        attemptedAt: fixedTime,
+      );
+
+      final recent = await repository.getRecentAttempts(limit: 10);
+      expect(recent.length, greaterThanOrEqualTo(2));
+      expect(recent.first.sessionId, equals('session_new'));
+      expect(recent.first.targetPackage, equals(ChannelConstants.targetInstagram));
+    });
   });
 }

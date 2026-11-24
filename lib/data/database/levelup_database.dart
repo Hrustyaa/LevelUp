@@ -24,6 +24,9 @@ class LevelUpDatabase {
   })  : _factory = databaseFactory,
         _customPath = customPath;
 
+  /// The database factory configured for this instance, if any.
+  DatabaseFactory? get factory => _factory;
+
   /// True if a connection is currently open and active.
   bool get isOpen => _db != null && _db!.isOpen;
 

@@ -19,6 +19,7 @@ import '../theme/dev_lab_theme.dart';
 import '../widgets/diagnostic_card.dart';
 import '../widgets/live_event_log_view.dart';
 import '../widgets/status_badge.dart';
+import 'workout_result_screen.dart';
 
 /// Screen 3 — Live Challenge Screen: Front camera pose tracking and workout orchestration.
 ///
@@ -945,6 +946,21 @@ class _LiveChallengeScreenState extends State<LiveChallengeScreen>
             ),
           ],
           const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              icon: const Icon(Icons.assignment_outlined, size: 18),
+              label: const Text('View Workout Result'),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => WorkoutResultScreen(sessionId: state.sessionId),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
           Row(
             children: [
               Expanded(
@@ -966,7 +982,7 @@ class _LiveChallengeScreenState extends State<LiveChallengeScreen>
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: FilledButton.icon(
+                child: OutlinedButton.icon(
                   icon: const Icon(Icons.home_outlined, size: 18),
                   label: const Text('Return to Hub'),
                   onPressed: () => Navigator.of(context).pop(),

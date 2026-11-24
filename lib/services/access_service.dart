@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../core/constants/channel_constants.dart';
@@ -124,26 +123,9 @@ class AccessService implements IAccessService {
       }
 
       // 7. Invoke Native Bridge grantAccess
-      final grantStartEpochMs = _clock().millisecondsSinceEpoch;
       final unlockUntil = await _bridge.grantAccess(
         minutes: request.durationMinutes,
       );
-      final unlockUntilEpochMs = unlockUntil.millisecondsSinceEpoch;
-      final currentEpochMs = _clock().millisecondsSinceEpoch;
-      final calculatedRemainingMs = unlockUntilEpochMs - currentEpochMs;
-
-      assert(() {
-        debugPrint(
-          'ACCESS_GRANT_DIAGNOSTICS: '
-          'startEpochMs=$grantStartEpochMs, '
-          'unlockUntilEpochMs=$unlockUntilEpochMs, '
-          'currentEpochMs=$currentEpochMs, '
-          'calculatedRemainingMs=$calculatedRemainingMs, '
-          'selectedTargetPackage=${request.targetPackage}, '
-          'activeSessionId=${request.sessionId}',
-        );
-        return true;
-      }());
 
       final grantResult = AccessGrantResult(
         sessionId: request.sessionId,

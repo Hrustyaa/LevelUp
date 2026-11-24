@@ -170,6 +170,9 @@ class FailingAccessAttemptRepository implements IAccessAttemptRepository {
     required String reason,
   }) async =>
       throw UnimplementedError();
+
+  @override
+  Future<List<AccessAttemptRecord>> getRecentAttempts({int limit = 50}) async => [];
 }
 
 /// Helper that simulates full squat repetitions by sending interior knee angles.

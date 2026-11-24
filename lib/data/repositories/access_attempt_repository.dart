@@ -49,6 +49,9 @@ abstract class IAccessAttemptRepository {
     required String sessionId,
     required String reason,
   });
+
+  /// Retrieves recent access attempts ordered by attempt date descending, up to [limit].
+  Future<List<AccessAttemptRecord>> getRecentAttempts({int limit = 50});
 }
 
 /// Production SQLite implementation of [IAccessAttemptRepository].
@@ -273,6 +276,17 @@ class AccessAttemptRepository implements IAccessAttemptRepository {
 
       return updated;
     });
+  }
+
+  @override
+  Future<List<AccessAttemptRecord>> getRecentAttempts({int limit = 50}) async {
+    final db = await _dbManager.database;
+    final rows = await db.query(
+      DatabaseConstants.tableAccessAttempts,
+      orderBy: '${DatabaseConstants.colAttemptedAt} DESC',
+      limit: limit,
+    );
+    return rows.map((r) => AccessAttemptRecord.fromMap(r)).toList();
   }
 
   Future<AccessAttemptRecord> _requireAttempt(DatabaseExecutor executor, String sessionId) async {
