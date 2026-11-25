@@ -668,6 +668,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
       refreshToken: _homeRefreshToken,
       progressStream: _scope?.progressService.stateStream,
       statisticsStream: _scope?.statisticsService.snapshotStream,
+      achievementStream: _scope?.achievementService.stateStream,
       soundFeedbackEnabled: settings?.soundFeedbackEnabled,
       diagnosticLoggingEnabled: settings?.diagnosticLoggingEnabled,
       onSoundFeedbackChanged: _scope != null ? _updateSoundFeedback : null,

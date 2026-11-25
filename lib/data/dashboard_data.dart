@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../features/achievements/models/achievement_state.dart';
 import '../features/progress/models/level_info.dart';
 import '../features/progress/models/streak_info.dart';
 import '../features/progress/models/xp_reward_record.dart';
@@ -219,6 +220,8 @@ class DashboardInsights {
     this.progressError,
     this.statistics,
     this.statisticsError,
+    this.achievements,
+    this.achievementsError,
     this.week = const [],
     this.events = const [],
     this.usageByApp = const {},
@@ -234,6 +237,8 @@ class DashboardInsights {
   final String? progressError;
   final StatisticsSnapshot? statistics;
   final String? statisticsError;
+  final AchievementState? achievements;
+  final String? achievementsError;
   final List<UsageDay> week;
   final List<ActivityEntry> events;
   final Map<String, int> usageByApp;

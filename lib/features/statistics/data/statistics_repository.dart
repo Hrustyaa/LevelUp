@@ -31,6 +31,10 @@ class SqliteStatisticsRepository implements IStatisticsRepository {
   SqliteStatisticsRepository({LevelUpDatabase? databaseManager})
       : _dbManager = databaseManager ?? LevelUpDatabase();
 
+  static const String _trustedWorkoutFilter =
+      "(${DatabaseConstants.colVerificationSource} IS NULL OR "
+      "${DatabaseConstants.colVerificationSource} NOT IN ('simulated', 'preview', 'ui_only', 'mock'))";
+
   @override
   Future<WorkoutStatistics> loadWorkoutStatistics({
     required DateTime now,
@@ -67,6 +71,7 @@ class SqliteStatisticsRepository implements IStatisticsRepository {
           THEN ${DatabaseConstants.colSessionId}
         END) AS free_workouts
       FROM ${DatabaseConstants.tableWorkoutSessions}
+      WHERE $_trustedWorkoutFilter
       ''',
       [
         day.startUtcMs,
@@ -195,6 +200,7 @@ class SqliteStatisticsRepository implements IStatisticsRepository {
         FROM ${DatabaseConstants.tableWorkoutSessions}
         WHERE ${DatabaseConstants.colCompletedAt} >= ?
           AND ${DatabaseConstants.colCompletedAt} < ?
+          AND $_trustedWorkoutFilter
         ''',
         [range.startUtcMs, range.endUtcMs],
       ),

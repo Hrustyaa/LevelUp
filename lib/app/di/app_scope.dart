@@ -122,6 +122,7 @@ class AppScope {
           accessRepo: accessAttemptRepository,
           progressService: this.progressService,
           statisticsService: statisticsService,
+          achievementService: achievementService,
         );
   }
 

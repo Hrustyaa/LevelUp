@@ -5,6 +5,10 @@ import 'package:flutter/foundation.dart' show listEquals, mapEquals, setEquals;
 import 'package:material_ui/material_ui.dart';
 
 import '../data/dashboard_data.dart';
+import '../features/achievements/data/achievement_catalog.dart';
+import '../features/achievements/models/achievement_category.dart';
+import '../features/achievements/models/achievement_progress.dart';
+import '../features/achievements/models/achievement_state.dart';
 import '../features/progress/models/progress_state.dart';
 import '../features/statistics/models/daily_activity_stats.dart';
 import '../features/statistics/models/statistics_snapshot.dart';
@@ -43,6 +47,7 @@ class LevelUpHomeScreen extends StatefulWidget {
     this.refreshToken = 0,
     this.progressStream,
     this.statisticsStream,
+    this.achievementStream,
     this.soundFeedbackEnabled,
     this.diagnosticLoggingEnabled,
     this.onSoundFeedbackChanged,
@@ -71,6 +76,7 @@ class LevelUpHomeScreen extends StatefulWidget {
   final int refreshToken;
   final Stream<ProgressState>? progressStream;
   final Stream<StatisticsSnapshot>? statisticsStream;
+  final Stream<AchievementState>? achievementStream;
   final bool? soundFeedbackEnabled, diagnosticLoggingEnabled;
   final Future<void> Function(bool)? onSoundFeedbackChanged,
       onDiagnosticLoggingChanged;
@@ -97,6 +103,10 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
   Object? _lastProgressSignature;
   StreamSubscription<StatisticsSnapshot>? _statisticsSub;
   Object? _lastStatisticsSignature;
+  StreamSubscription<AchievementState>? _achievementSub;
+  Object? _lastAchievementSignature;
+  bool _achievementsBaselineSeeded = false;
+  final Set<String> _shownUnlockIds = {};
   DateTime _now = DateTime.now();
   final _countdown = ValueNotifier(DateTime.now());
   int _seconds = 0;
@@ -114,6 +124,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _bindProgressStream();
     _bindStatisticsStream();
+    _bindAchievementStream();
     _refresh();
     _startTicker();
   }
@@ -172,6 +183,24 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     });
   }
 
+  Object _signatureFromAchievements(AchievementState state) => (
+    state.unlockedCount,
+    state.totalCount,
+    state.achievements.fold<int>(0, (s, a) => s + a.clampedCurrentValue),
+    state.errorMessage,
+  );
+
+  void _bindAchievementStream() {
+    _achievementSub?.cancel();
+    _achievementSub = widget.achievementStream?.listen((state) {
+      if (!mounted || state.isLoading || _refreshing) return;
+      final sig = _signatureFromAchievements(state);
+      if (sig == _lastAchievementSignature) return;
+      _lastAchievementSignature = sig;
+      _refresh();
+    });
+  }
+
   @override
   void didUpdateWidget(covariant LevelUpHomeScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -184,6 +213,9 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     }
     if (oldWidget.statisticsStream != widget.statisticsStream) {
       _bindStatisticsStream();
+    }
+    if (oldWidget.achievementStream != widget.achievementStream) {
+      _bindAchievementStream();
     }
     if (oldWidget.gateway != widget.gateway ||
         oldWidget.loadInsights != widget.loadInsights ||
@@ -236,6 +268,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     _ticker?.cancel();
     _progressSub?.cancel();
     _statisticsSub?.cancel();
+    _achievementSub?.cancel();
     _insightState.dispose();
     _countdown.dispose();
     for (final s in _scrolls.values) {
@@ -284,6 +317,11 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
             insights.statistics!,
           );
         }
+        if (insights.achievements != null) {
+          _lastAchievementSignature = _signatureFromAchievements(
+            insights.achievements!,
+          );
+        }
       }
     } finally {
       if (generation == _generation) {
@@ -306,6 +344,35 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       _now = DateTime.now();
       _countdown.value = _now;
     });
+    _handleAchievementFeedback(insights.achievements);
+  }
+
+  void _handleAchievementFeedback(AchievementState? state) {
+    if (!mounted || state == null || state.hasError) return;
+    if (!_achievementsBaselineSeeded) {
+      _achievementsBaselineSeeded = true;
+      for (final a in state.unlockedAchievements) {
+        _shownUnlockIds.add(a.id);
+      }
+      return;
+    }
+    final fresh = state.recentlyUnlocked
+        .where((r) => !_shownUnlockIds.contains(r.achievementId))
+        .toList(growable: false);
+    if (fresh.isEmpty) return;
+    for (final r in fresh) {
+      _shownUnlockIds.add(r.achievementId);
+    }
+    final title = _achievementTitle(fresh.first.achievementId);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Text(
+          '${tr('Achievement unlocked', 'Достижение открыто', 'Жетістік ашылды')}: $title',
+        ),
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   bool _sameFocus(FocusSnapshot? a, FocusSnapshot? b) =>
@@ -2568,6 +2635,15 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       _section(tr('Screen time', 'Экранное время', 'Экран уақыты')),
       _usageCard(),
     ],
+    if (_insights.achievements != null) ...[
+      _gap(),
+      _section(tr('Achievements', 'Достижения', 'Жетістіктер')),
+      _achievementsCard(_insights.achievements!),
+    ] else if (_insights.achievementsError != null) ...[
+      _gap(),
+      _section(tr('Achievements', 'Достижения', 'Жетістіктер')),
+      _achievementsErrorCard(),
+    ],
     _gap(),
     _section(
       tr('Activity', 'Активность', 'Белсенділік'),
@@ -2729,6 +2805,198 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       ),
     ),
   ];
+  Widget _achievementsErrorCard() => _card(
+    _sub(
+      tr(
+        'Achievements could not be loaded.',
+        'Не удалось загрузить достижения.',
+        'Жетістіктерді жүктеу мүмкін болмады.',
+      ),
+    ),
+    key: const ValueKey('achievements_error'),
+  );
+
+  IconData _achievementIcon(AchievementCategory category) => switch (category) {
+    AchievementCategory.workouts => Icons.fitness_center_rounded,
+    AchievementCategory.repetitions => Icons.accessibility_new_rounded,
+    AchievementCategory.unlocks => Icons.lock_open_rounded,
+    AchievementCategory.streaks => Icons.local_fire_department_rounded,
+    AchievementCategory.levels => Icons.trending_up_rounded,
+  };
+
+  String _achievementTitle(String id) => switch (id) {
+    AchievementCatalog.firstWorkoutId =>
+      tr('First Step', 'Первый шаг', 'Алғашқы қадам'),
+    AchievementCatalog.fiveWorkoutsId =>
+      tr('Getting Stronger', 'Становясь сильнее', 'Күшейе түсу'),
+    AchievementCatalog.twentyFiveSquatsId =>
+      tr('Squat Starter', 'Мастер приседаний', 'Отырып-тұру бастауы'),
+    AchievementCatalog.firstUnlockId =>
+      tr('Focus Breakthrough', 'Прорыв фокуса', 'Фокус серпілісі'),
+    AchievementCatalog.threeDayStreakId =>
+      tr('Consistency', 'Постоянство', 'Тұрақтылық'),
+    AchievementCatalog.reachLevelTwoId =>
+      tr('Level Up', 'Новый уровень', 'Жаңа деңгей'),
+    _ => id,
+  };
+
+  String _achievementDescription(String id) => switch (id) {
+    AchievementCatalog.firstWorkoutId => tr(
+      'Complete 1 verified workout.',
+      'Заверши 1 проверенную тренировку.',
+      '1 расталған жаттығуды аяқта.',
+    ),
+    AchievementCatalog.fiveWorkoutsId => tr(
+      'Complete 5 verified workouts.',
+      'Заверши 5 проверенных тренировок.',
+      '5 расталған жаттығуды аяқта.',
+    ),
+    AchievementCatalog.twentyFiveSquatsId => tr(
+      'Accumulate 25 verified squats.',
+      'Набери 25 засчитанных приседаний.',
+      '25 есептелген отырып-тұруды жина.',
+    ),
+    AchievementCatalog.firstUnlockId => tr(
+      'Earn 1 confirmed app unlock.',
+      'Получи 1 подтверждённую разблокировку.',
+      '1 расталған қолданба ашуын ал.',
+    ),
+    AchievementCatalog.threeDayStreakId => tr(
+      'Reach a 3-day workout streak.',
+      'Достигни серии из 3 дней подряд.',
+      '3 күн қатарынан жаттығу сериясына жет.',
+    ),
+    AchievementCatalog.reachLevelTwoId => tr(
+      'Reach Level 2 in Progress.',
+      'Достигни 2 уровня прогресса.',
+      'Ілгерілеуде 2-деңгейге жет.',
+    ),
+    _ => '',
+  };
+
+  Widget _achievementsCard(AchievementState state) {
+    final total = state.totalCount;
+    final unlocked = state.unlockedCount;
+    final ratio = total > 0 ? unlocked / total : 0.0;
+    return _card(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _title(
+                  '${tr('Achievements', 'Достижения', 'Жетістіктер')}: $unlocked / $total',
+                  17,
+                ),
+              ),
+              _sub('${(ratio * 100).round()}%', 12),
+            ],
+          ),
+          _gap(8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: ratio,
+              minHeight: 5,
+              backgroundColor: _border,
+              valueColor: const AlwaysStoppedAnimation<Color>(_lime),
+            ),
+          ),
+          _gap(12),
+          for (final (i, item) in state.achievements.indexed) ...[
+            if (i > 0) const Divider(height: 18),
+            _achievementRow(item),
+          ],
+        ],
+      ),
+      key: const ValueKey('achievements_card'),
+    );
+  }
+
+  Widget _achievementRow(AchievementProgress item) {
+    final unlocked = item.isUnlocked;
+    final unlockedDate = item.unlockedAt != null
+        ? MaterialLocalizations.of(context)
+            .formatShortDate(item.unlockedAt!.toLocal())
+        : null;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: unlocked ? _lime.withValues(alpha: 0.14) : _bg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: unlocked ? _lime : _border,
+            ),
+          ),
+          child: Icon(
+            unlocked ? Icons.verified_rounded : _achievementIcon(item.definition.category),
+            color: unlocked ? _lime : _muted,
+            size: 18,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _achievementTitle(item.id),
+                      style: TextStyle(
+                        color: unlocked ? _ink : _muted,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '${item.clampedCurrentValue} / ${item.targetValue}',
+                    style: TextStyle(
+                      color: unlocked ? _lime : _muted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+              _gap(2),
+              _sub(_achievementDescription(item.id), 12),
+              _gap(6),
+              if (unlocked)
+                Text(
+                  unlockedDate != null
+                      ? '${tr('Unlocked', 'Открыто', 'Ашылды')} · $unlockedDate'
+                      : tr('Unlocked', 'Открыто', 'Ашылды'),
+                  style: const TextStyle(
+                    color: _lime,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                )
+              else
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: LinearProgressIndicator(
+                    value: item.fraction,
+                    minHeight: 4,
+                    backgroundColor: _border,
+                    valueColor: const AlwaysStoppedAnimation<Color>(_muted),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _statisticsErrorCard() => _card(
     _sub(
       tr(

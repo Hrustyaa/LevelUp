@@ -2,6 +2,8 @@ import '../../core/constants/channel_constants.dart';
 import '../../data/dashboard_data.dart';
 import '../../data/repositories/access_attempt_repository.dart';
 import '../../data/repositories/workout_history_repository.dart';
+import '../../features/achievements/application/achievement_service.dart';
+import '../../features/achievements/models/achievement_state.dart';
 import '../../features/progress/application/progress_service.dart';
 import '../../features/progress/models/level_info.dart';
 import '../../features/progress/models/progress_state.dart';
@@ -23,6 +25,7 @@ class CoreInsightsAdapter {
   final IAccessAttemptRepository _accessRepo;
   final IProgressService? _progressService;
   final IStatisticsService? _statisticsService;
+  final IAchievementService? _achievementService;
   final DateTime Function() _clock;
 
   CoreInsightsAdapter({
@@ -30,11 +33,13 @@ class CoreInsightsAdapter {
     required IAccessAttemptRepository accessRepo,
     IProgressService? progressService,
     IStatisticsService? statisticsService,
+    IAchievementService? achievementService,
     DateTime Function()? clock,
   })  : _historyRepo = historyRepo,
         _accessRepo = accessRepo,
         _progressService = progressService,
         _statisticsService = statisticsService,
+        _achievementService = achievementService,
         _clock = clock ?? DateTime.now;
 
   Future<DashboardInsights> loadInsights([Set<String>? packageIds]) async {
@@ -58,6 +63,16 @@ class CoreInsightsAdapter {
         statisticsSnapshot = await _statisticsService.refresh();
       } catch (e) {
         statisticsError = '$e';
+      }
+    }
+
+    AchievementState? achievementState;
+    String? achievementsError;
+    if (_achievementService != null) {
+      try {
+        achievementState = await _achievementService.evaluateAndRefresh();
+      } catch (e) {
+        achievementsError = '$e';
       }
     }
 
@@ -183,6 +198,8 @@ class CoreInsightsAdapter {
       progressError: progressState?.errorMessage,
       statistics: statisticsSnapshot,
       statisticsError: statisticsError ?? statisticsSnapshot?.errorMessage,
+      achievements: achievementState,
+      achievementsError: achievementsError ?? achievementState?.errorMessage,
       week: const [],
       events: events,
       usageByApp: const {},
