@@ -110,7 +110,6 @@ class _AndroidTestKitState extends State<_AndroidTestKit>
       MaterialPageRoute<void>(
         builder: (_) => ChallengeScreen(
           exercise: focusExercises.first,
-          appName: testApps[request?.target ?? state['target']] ?? 'LevelUp',
           onCompleted: request == null
               ? null
               : (repetitions) =>

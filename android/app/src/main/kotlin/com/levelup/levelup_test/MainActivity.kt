@@ -36,6 +36,7 @@ class MainActivity : FlutterActivity() {
                         if (target !in allowedTargets) {
                             result.error("TARGET", "Unsupported test package", null)
                         } else {
+                            LevelUpAccessibilityService.instance?.invalidateChallenge()
                             prefs.edit().putString("target", target).putLong("unlock_until", 0L).apply()
                             LevelUpAccessibilityService.instance?.reevaluate()
                             result.success(true)
@@ -43,6 +44,7 @@ class MainActivity : FlutterActivity() {
                     }
                     "setEnabled" -> {
                         val enabled = call.argument<Boolean>("enabled") ?: false
+                        if (!enabled) LevelUpAccessibilityService.instance?.invalidateChallenge()
                         prefs.edit().putBoolean("enabled", enabled).apply()
                         LevelUpAccessibilityService.instance?.reevaluate()
                         result.success(true)
@@ -51,21 +53,38 @@ class MainActivity : FlutterActivity() {
                         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                         result.success(true)
                     }
-                    "consumeChallengeRequest" -> {
-                        val requested = prefs.getBoolean("open_challenge", false)
-                        prefs.edit().putBoolean("open_challenge", false).apply()
-                        result.success(requested)
+                    "setGateLanguage" -> {
+                        val language = call.argument<String>("language")
+                        if (language in setOf("ru", "en", "kk")) {
+                            prefs.edit().putString("language", language).apply()
+                        }
+                        result.success(null)
+                    }
+                    "claimFocusChallenge" -> {
+                        val request = LevelUpAccessibilityService.instance?.takeIf { isServiceEnabled() }
+                        result.success(request?.claimChallenge())
+                    }
+                    "cancelChallenge" -> {
+                        val id = call.argument<String>("id")
+                        result.success(id != null &&
+                            LevelUpAccessibilityService.instance?.cancelChallenge(id) == true)
                     }
                     "grantAccess" -> {
-                        val minutes = (call.argument<Int>("minutes") ?: 5).coerceIn(1, 15)
-                        val unlockUntil = System.currentTimeMillis() + minutes * 60_000L
-                        prefs.edit().putLong("unlock_until", unlockUntil).apply()
-                        LevelUpAccessibilityService.instance?.reevaluate()
-                        result.success(unlockUntil)
-                        // Only attempts to return to one of the three user-selected apps.
-                        val target = prefs.getString("target", "com.google.android.youtube")
-                        if (target in allowedTargets) {
-                            val launch = packageManager.getLaunchIntentForPackage(target!!)
+                        val target = call.argument<String>("target")
+                        val service = LevelUpAccessibilityService.instance
+                        if (target == null || target !in allowedTargets || !isServiceEnabled() ||
+                            service?.consumeCompletedChallenge(
+                                call.argument<String>("id"), target, call.argument<Int>("repetitions"),
+                            ) != true) {
+                            result.error("CHALLENGE", "No matching completed Focus challenge", null)
+                        } else {
+                            val unlockUntil = System.currentTimeMillis() +
+                                LevelUpAccessibilityService.FOCUS_ACCESS_MINUTES * 60_000L
+                            prefs.edit().putLong("unlock_until", unlockUntil).apply()
+                            service.reevaluate()
+                            result.success(unlockUntil)
+                            // Preserve the existing automatic launch after a grant.
+                            val launch = packageManager.getLaunchIntentForPackage(target)
                             if (launch != null) {
                                 launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 startActivity(launch)

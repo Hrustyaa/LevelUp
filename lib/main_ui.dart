@@ -20,7 +20,6 @@ import 'screens/levelup_splash_screen.dart';
 import 'screens/levelup_welcome_screen.dart';
 import 'screens/manage_apps_screen.dart';
 import 'test_kit/challenge_screen.dart';
-import 'test_kit/test_kit_screen.dart' show testApps;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -257,16 +256,10 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
       await exercises.recordAssignment(exercise.id);
       if (!mounted) return;
 
-      final target = claimed.target;
-      final appName =
-          _catalog.where((app) => app.id == target).firstOrNull?.name ??
-          testApps[target] ??
-          target;
       await Navigator.of(context).push<void>(
         MaterialPageRoute(
           builder: (_) => ChallengeScreen(
             exercise: exercise,
-            appName: appName,
             language: _language.name,
             onCompleted: (repetitions) =>
                 gateway.completeChallenge(claimed, repetitions),

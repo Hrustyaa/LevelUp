@@ -8,6 +8,7 @@ import 'package:levelup_test/screens/levelup_focus_setup_screen.dart';
 import 'package:levelup_test/screens/levelup_home_screen.dart';
 import 'package:levelup_test/screens/levelup_permissions_screen.dart';
 import 'package:levelup_test/screens/levelup_welcome_screen.dart';
+import 'package:levelup_test/test_kit/challenge_screen.dart';
 import 'package:levelup_test/test_kit/test_kit_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -32,7 +33,7 @@ void main() {
       focusMethods.add(call.method);
       return switch (call.method) {
         'getState' => {'serviceEnabled': true, 'enabled': false, 'target': ''},
-        'consumeChallengeRequest' => null,
+        'claimFocusChallenge' => null,
         _ => false,
       };
     });
@@ -147,7 +148,7 @@ void main() {
             'enabled': false,
             'target': '',
           },
-          'consumeChallengeRequest' => null,
+          'claimFocusChallenge' => null,
           _ => false,
         };
       });
@@ -196,7 +197,7 @@ void main() {
         case 'setGateLanguage':
           gateLanguage = call.arguments['language'] as String;
           return null;
-        case 'consumeChallengeRequest':
+        case 'claimFocusChallenge':
           if (!pending) return null;
           consumed++;
           pending = false;
@@ -239,18 +240,17 @@ void main() {
     });
 
     await tester.pumpWidget(const LevelUpIntroDemo());
-    final challenge = find.byType(FocusChallengeScreen);
+    final challenge = find.byType(ChallengeScreen);
     for (var frame = 0; frame < 40 && challenge.evaluate().isEmpty; frame++) {
       await tester.pump(const Duration(milliseconds: 100));
     }
     await tester.pump(const Duration(milliseconds: 400));
     expect(gateLanguage, 'ru');
     expect(consumed, 1);
-    expect(find.byType(FocusChallengeScreen), findsOneWidget);
+    expect(challenge, findsOneWidget);
     expect(find.byType(TestKitScreen), findsNothing);
-    expect(find.text('0 / 5'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Отменить задание'));
+    await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(find.byType(LevelUpHomeScreen), findsOneWidget);
     expect(grants, 0);
@@ -286,7 +286,7 @@ void main() {
       methods.add(call.method);
       return switch (call.method) {
         'getState' => {'serviceEnabled': false, 'enabled': false},
-        'consumeChallengeRequest' => null,
+        'claimFocusChallenge' => null,
         _ => false,
       };
     });
