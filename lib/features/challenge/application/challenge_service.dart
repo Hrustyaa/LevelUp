@@ -5,7 +5,6 @@ import '../../../models/challenge_request.dart';
 import '../../../models/challenge_type.dart';
 import '../../../models/exercise_type.dart';
 import '../data/challenge_catalog.dart';
-import 'push_up_verification.dart';
 
 export '../../../core/errors/challenge_exceptions.dart';
 export '../../../models/challenge_definition.dart';
@@ -108,10 +107,6 @@ class ChallengeService implements IChallengeService {
       throw UnsupportedChallengeTargetException(targetPackage);
     }
 
-    if (exerciseType == ExerciseType.pushUp && !PushUpVerification.unlockEnabled) {
-      throw const InvalidChallengeRequestException('Push-up unlocking is disabled.');
-    }
-
     final challenge = exerciseType == ExerciseType.pushUp
         ? getChallengeDefinition(ChallengeCatalog.pushUpUnlockId)
         : getDefaultUnlockChallenge();
@@ -155,12 +150,6 @@ class ChallengeService implements IChallengeService {
     request.validate();
 
     // 3. Verify context alignment
-    if (request.isUnlock &&
-        definition.exerciseType == ExerciseType.pushUp &&
-        !PushUpVerification.unlockEnabled) {
-      throw const InvalidChallengeRequestException('Push-up unlocking is disabled.');
-    }
-
     if (request.isUnlock && definition.accessDurationSeconds <= 0) {
       throw InvalidChallengeRequestException(
         'Challenge "${definition.challengeId}" has 0 access duration and cannot be used as an unlock challenge.',

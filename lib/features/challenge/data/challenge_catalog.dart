@@ -1,6 +1,5 @@
 import '../../../models/challenge_definition.dart';
 import '../../../models/exercise_type.dart';
-import '../application/push_up_verification.dart';
 
 /// Centralized catalog containing all valid challenge definitions in LevelUp.
 ///
@@ -69,7 +68,7 @@ abstract final class ChallengeCatalog {
     squatUnlockChallenge,
     squatFreeWorkout,
     pushUpFreeWorkout,
-    if (PushUpVerification.unlockEnabled) pushUpUnlockChallenge,
+    pushUpUnlockChallenge,
   ];
 
   /// Fast lookup map by challengeId.

@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../core/integration/pose_event_adapter.dart';
 import '../features/challenge/application/push_up_verification.dart';
 import 'challenge_type.dart';
 import 'exercise_type.dart';
@@ -82,7 +83,10 @@ class WorkoutSession {
   /// Converts a successfully completed session into a structured [WorkoutResult].
   ///
   /// Throws [StateError] if session is not in [WorkoutSessionStatus.completed] status.
-  WorkoutResult toWorkoutResult({String? source}) {
+  WorkoutResult toWorkoutResult({
+    String? source,
+    PushUpCompletion? pushUpCompletion,
+  }) {
     if (status != WorkoutSessionStatus.completed) {
       throw StateError(
         'Cannot convert session "$sessionId" to WorkoutResult: status is $status (expected completed).',
@@ -109,11 +113,12 @@ class WorkoutSession {
       accessDurationSeconds: isUnlock ? accessDurationSeconds : 0,
       earnedXp: resolvedSource == 'simulated' ||
               (exerciseType == ExerciseType.pushUp &&
-                  (!PushUpVerification.physicallyValidated ||
+                  (pushUpCompletion == null ||
                       resolvedSource != PushUpVerification.verifiedSource))
           ? 0
           : xpReward,
       source: resolvedSource,
+      pushUpCompletion: pushUpCompletion,
     );
   }
 

@@ -36,7 +36,13 @@ void main() {
       final available1 = service.getAvailableChallenges();
       final available2 = service.getAvailableChallenges();
 
-      expect(available1.length, equals(3));
+      expect(available1.length, equals(4));
+      final pushUps = available1.singleWhere(
+        (definition) => definition.challengeId == ChallengeCatalog.pushUpUnlockId,
+      );
+      expect(pushUps.exerciseType, ExerciseType.pushUp);
+      expect(pushUps.targetRepetitions, 5);
+      expect(pushUps.accessDurationSeconds, 300);
       expect(available1, equals(available2));
 
       // Attempting to modify the list should throw UnsupportedError

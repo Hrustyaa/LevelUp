@@ -355,6 +355,8 @@ void main() {
       await tester.tap(openChallengeBtn);
       await tester.pumpAndSettle();
       expect(find.byType(WorkoutExerciseScreen), findsOneWidget);
+      expect(find.text('Choose your exercise'), findsOneWidget);
+      expect(find.text('+50 XP'), findsNWidgets(2));
       expect(find.byType(ProductionChallengeScreen), findsNothing);
       expect(scope.coordinator.currentState.sessionId, isNull);
 
@@ -365,7 +367,15 @@ void main() {
       expect(cameraChecker.checkCount, cameraChecksBeforeChoice);
       expect(scope.coordinator.currentState.sessionId, isNull);
 
-      await tester.tap(find.text('Start Workout'));
+      final started = <String>{};
+      final sessionSubscription = scope.sessionManager.sessionStream.listen((session) {
+        if (session.status == WorkoutSessionStatus.active) started.add(session.sessionId);
+      });
+      addTearDown(sessionSubscription.cancel);
+      final start = find.text('Start Workout');
+      final startCenter = tester.getCenter(start);
+      await tester.tap(start);
+      await tester.tapAt(startCenter);
       await tester.pump();
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
@@ -376,14 +386,21 @@ void main() {
       );
       expect(screen.isUnlockChallenge, isFalse);
       expect(screen.exerciseType, ExerciseType.pushUp);
-      expect(find.byType(ChoiceChip), findsNothing);
+      expect(find.byType(WorkoutExerciseScreen), findsNothing);
       expect(scope.coordinator.currentState.challenge?.exerciseType, ExerciseType.pushUp);
       expect(cameraChecker.checkCount, greaterThan(cameraChecksBeforeChoice));
+      expect(started, {scope.coordinator.currentState.sessionId});
       expect(scope.settingsService.currentState.settings.preferredExerciseType, ExerciseType.pushUp);
       final prefs = await SharedPreferences.getInstance();
-      expect(FocusExercisePreferences(prefs, allowPushUpUnlock: true).selected, {FocusExerciseId.squat});
+      expect(FocusExercisePreferences(prefs).selected, {FocusExerciseId.squat});
       expect(methodCalls, isNot(contains(ChannelConstants.methodGrantAccess)));
       expect(methodCalls, isNot(contains('setGateLanguage')));
+      await tester.tap(find.byTooltip('Cancel challenge'));
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(find.byType(ProductionChallengeScreen), findsNothing);
+      expect(find.text('Open workout'), findsOneWidget);
+      expect(scope.coordinator.currentState.sessionId, isNull);
     });
 
     testWidgets('6. Surfaces AppScope initializationError instead of faking a ready state', (tester) async {

@@ -10,11 +10,9 @@ import 'package:material_ui/material_ui.dart';
 import '../../core/integration/coordinator_state.dart';
 import '../../core/integration/core_integration_coordinator.dart';
 import '../../core/integration/pose_event_adapter.dart';
-import '../../features/challenge/application/push_up_verification.dart';
 import '../../features/pose_detection/application/pose_landmark_smoother.dart';
 import '../../features/pose_detection/application/pose_temporal_guard.dart';
 import '../../features/pose_detection/application/pose_visibility_hysteresis.dart';
-import '../../features/pose_detection/application/push_up_counter.dart';
 import '../../features/pose_detection/application/squat_counter.dart';
 import '../../features/pose_detection/application/squat_geometry.dart';
 import '../../features/pose_detection/models/pose_overlay_state.dart';
@@ -61,7 +59,6 @@ class ProductionChallengeController extends ChangeNotifier {
   final String? _unlockSessionId;
   late final PoseEngineAdapter? _poseAdapter;
   late final PushUpPoseAdapter? _pushUpPoseAdapter;
-  late final PushUpCounter? _pushUpCounter;
   final Future<List<CameraDescription>> Function()? _availableCamerasOverride;
   final CameraControllerFactory? _cameraControllerFactory;
   final PoseProcessor? _poseProcessorOverride;
@@ -107,7 +104,7 @@ class ProductionChallengeController extends ChangeNotifier {
     required ICameraPermissionChecker cameraPermissionChecker,
     required INativeBridge nativeBridge,
     required this.isUnlockChallenge,
-    ExerciseType exerciseType = ExerciseType.squats,
+    this.exerciseType = ExerciseType.squats,
     this.language = 'ru',
     String? unlockSessionId,
     PoseEngineAdapter? poseAdapter,
@@ -115,10 +112,7 @@ class ProductionChallengeController extends ChangeNotifier {
     CameraControllerFactory? cameraControllerFactory,
     PoseProcessor? poseProcessorOverride,
     DateTime Function()? clock,
-  }) : exerciseType = isUnlockChallenge && !PushUpVerification.unlockEnabled
-           ? ExerciseType.squats
-           : exerciseType,
-       _coordinator = coordinator,
+  }) : _coordinator = coordinator,
        _cameraPermissionChecker = cameraPermissionChecker,
        _nativeBridge = nativeBridge,
        _unlockSessionId = unlockSessionId,
@@ -126,21 +120,16 @@ class ProductionChallengeController extends ChangeNotifier {
        _cameraControllerFactory = cameraControllerFactory,
        _poseProcessorOverride = poseProcessorOverride,
        _clock = clock ?? DateTime.now {
-    final pushUps = this.exerciseType == ExerciseType.pushUp;
+    final pushUps = exerciseType == ExerciseType.pushUp;
     _poseAdapter = pushUps ? null : poseAdapter ?? PoseEngineAdapter();
-    _pushUpCounter = pushUps
-        ? PushUpCounter(
+    _pushUpPoseAdapter = pushUps
+        ? PushUpPoseAdapter(
             onDiagnostic:
                 kDebugMode &&
-                    const bool.fromEnvironment(
-                      'LEVELUP_DEBUG_PUSH_UP_DIAGNOSTICS',
-                    )
+                    const bool.fromEnvironment('LEVELUP_DEBUG_PUSH_UP_DIAGNOSTICS')
                 ? (message) => debugPrint('LevelUp push-up: $message')
                 : null,
           )
-        : null;
-    _pushUpPoseAdapter = pushUps
-        ? PushUpPoseAdapter(counter: _pushUpCounter)
         : null;
   }
 
@@ -197,17 +186,7 @@ class ProductionChallengeController extends ChangeNotifier {
 
       _coordinatorSub ??= _coordinator.stateStream.listen(_onCoordinatorState);
 
-      if (_poseProcessorOverride == null && _poseDetector == null) {
-        _poseDetector = PoseDetector(
-          options: PoseDetectorOptions(
-            mode: PoseDetectionMode.stream,
-            model: PoseDetectionModel.base,
-          ),
-        );
-      }
-
       _poseAdapter?.reset();
-      _pushUpPoseAdapter?.reset();
       _coordinator.attachPoseEventSource(
         _pushUpPoseAdapter ?? _poseAdapter!,
         sessionId: _sessionId,
@@ -482,8 +461,12 @@ class ProductionChallengeController extends ChangeNotifier {
       if (_poseProcessorOverride != null) {
         poses = await _poseProcessorOverride(input);
       } else {
-        final detector = _poseDetector;
-        if (detector == null) return;
+        final detector = _poseDetector ??= PoseDetector(
+          options: PoseDetectorOptions(
+            mode: PoseDetectionMode.stream,
+            model: PoseDetectionModel.base,
+          ),
+        );
         poses = await detector.processImage(input);
       }
 
@@ -874,7 +857,7 @@ class ProductionChallengeController extends ChangeNotifier {
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
       _foreground = false;
-      _pushUpCounter?.interruptTracking();
+      _pushUpPoseAdapter?.interruptTracking();
       if (_ownsSession) {
         _pushUpPoseAdapter?.processPose(null, timestamp: _clock());
         _poseAdapter?.processAngle(null);

@@ -18,11 +18,15 @@ class DailyActivityStats {
   /// Total verified squat repetitions across completed workouts on this day.
   final int verifiedRepetitions;
 
+  /// Total verified push-up repetitions across completed workouts on this day.
+  final int verifiedPushUpRepetitions;
+
   const DailyActivityStats({
     required this.localDate,
     required this.dateKey,
     this.completedWorkouts = 0,
     this.confirmedUnlocks = 0,
     this.verifiedRepetitions = 0,
+    this.verifiedPushUpRepetitions = 0,
   });
 }

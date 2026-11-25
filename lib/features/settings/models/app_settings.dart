@@ -40,9 +40,8 @@ class AppSettings {
 
   /// Preferred exercise type for Free Workout mode.
   ///
-  /// Stored user preference; always valid (no validation required).
-  /// Defaults to [ExerciseType.squats]. Push-ups are not available as an
-  /// unlock challenge method and are gated at the UI/controller layer.
+  /// Defaults to [ExerciseType.squats]. Focus stores its unlock exercise
+  /// selection independently of the Free Workout setting.
   final ExerciseType preferredExerciseType;
 
   const AppSettings({

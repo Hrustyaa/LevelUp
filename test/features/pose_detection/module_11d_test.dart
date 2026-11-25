@@ -441,16 +441,18 @@ void main() {
       expect(unlockDef.accessDurationSeconds, 300);
     });
 
-    test('ProductionChallengeController forces squats when isUnlockChallenge is true', () {
-      final controller = ProductionChallengeController(
-        coordinator: _StubCoordinator(),
-        cameraPermissionChecker: _StubCameraChecker(),
-        nativeBridge: _StubNativeBridge(),
-        isUnlockChallenge: true,
-        exerciseType: ExerciseType.pushUp,
-      );
-      expect(controller.exerciseType, ExerciseType.squats);
-      controller.dispose();
+    test('unlock controllers retain the assigned exercise in the normal build', () {
+      for (final exercise in ExerciseType.values) {
+        final controller = ProductionChallengeController(
+          coordinator: _StubCoordinator(),
+          cameraPermissionChecker: _StubCameraChecker(),
+          nativeBridge: _StubNativeBridge(),
+          isUnlockChallenge: true,
+          exerciseType: exercise,
+        );
+        expect(controller.exerciseType, exercise);
+        controller.dispose();
+      }
     });
 
     test('Experimental push-up session preserves history honestly and earns zero production XP, stats, streaks, or achievements while squat rewards remain intact', () async {

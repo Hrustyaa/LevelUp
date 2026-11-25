@@ -13,7 +13,6 @@ import 'data/android_app_catalog.dart';
 import 'data/android_usage_gateway.dart';
 import 'data/dashboard_data.dart';
 import 'data/levelup_permissions.dart';
-import 'features/challenge/application/push_up_verification.dart';
 import 'focus_experience/focus_exercises.dart';
 import 'focus_experience/focus_screens.dart';
 import 'models/exercise_type.dart';
@@ -318,13 +317,10 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
     if (_scope != null) {
       final scope = _scope!;
       try {
-        final preferences = PushUpVerification.unlockEnabled
-            ? FocusExercisePreferences(
-                await SharedPreferences.getInstance(),
-                allowPushUpUnlock: true,
-              )
-            : null;
-        final exercise = preferences?.next();
+        final preferences = FocusExercisePreferences(
+          await SharedPreferences.getInstance(),
+        );
+        final exercise = preferences.next();
         if (!mounted) return;
         final session = await scope.coordinator.launchUnlockChallenge(
           exerciseType: exercise?.unlockType ?? ExerciseType.squats,
@@ -333,7 +329,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
         if (!mounted) return;
         if (exercise != null) {
           try {
-            await preferences!.recordAssignment(exercise.id);
+            await preferences.recordAssignment(exercise.id);
           } catch (error) {
             debugPrint('Could not save the Focus exercise assignment: $error');
           }
@@ -377,6 +373,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
 
       final exercises = FocusExercisePreferences(
         await SharedPreferences.getInstance(),
+        supportsPushUps: false,
       );
       final exercise = exercises.next();
       if (exercise == null || exercise.id != FocusExerciseId.squat) return;
@@ -417,11 +414,10 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
   }
 
   Future<void> _openExerciseSettings() async {
-    final allowPushUpUnlock =
-        _scope != null && PushUpVerification.unlockEnabled;
+    final supportsPushUps = _scope != null;
     final exercises = FocusExercisePreferences(
       await SharedPreferences.getInstance(),
-      allowPushUpUnlock: allowPushUpUnlock,
+      supportsPushUps: supportsPushUps,
     );
     if (!mounted) return;
     final selected = await Navigator.of(context).push<Set<FocusExerciseId>>(
@@ -429,7 +425,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
         builder: (routeContext) => FocusExerciseSettingsScreen(
           language: _language.name,
           initialSelection: exercises.selected,
-          allowPushUpUnlock: allowPushUpUnlock,
+          supportsPushUps: supportsPushUps,
           onSave: (selection) => Navigator.of(routeContext).pop(selection),
         ),
       ),

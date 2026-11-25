@@ -72,6 +72,11 @@ class AccessService implements IAccessService {
 
   @override
   Future<AccessGrantResult> grantAccessForCompletedWorkout(WorkoutResult result) async {
+    if (_bridge is NativeBridge && result.source == 'simulated') {
+      throw const IneligibleWorkoutContextException(
+        message: 'Simulated workouts cannot grant native access.',
+      );
+    }
     final request = AccessGrantRequest.fromWorkoutResult(result);
     return _requestAccess(request);
   }

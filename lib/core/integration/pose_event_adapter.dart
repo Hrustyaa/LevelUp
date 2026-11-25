@@ -30,10 +30,8 @@ class PoseEngineAdapter implements IPoseEventSource {
   @override
   final bool isSimulated;
 
-  PoseEngineAdapter({
-    SquatCounter? counter,
-    this.isSimulated = false,
-  }) : _counter = counter ?? SquatCounter();
+  PoseEngineAdapter({SquatCounter? counter, this.isSimulated = false})
+    : _counter = counter ?? SquatCounter();
 
   @override
   Stream<SquatCounterResult> get poseStream => _controller.stream;
@@ -59,6 +57,21 @@ class PoseEngineAdapter implements IPoseEventSource {
   }
 }
 
+typedef PushUpSessionIdentity = ({
+  String sessionId,
+  String requestId,
+  String challengeId,
+  String? targetPackage,
+  int repetitions,
+});
+
+/// Evidence issued when the live counter completes its bound workout.
+final class PushUpCompletion {
+  final PushUpSessionIdentity identity;
+
+  const PushUpCompletion._(this.identity);
+}
+
 /// Adapter that processes push-up poses through a [PushUpCounter] and exposes
 /// the results as an [IPoseEventSource].
 ///
@@ -67,6 +80,10 @@ class PoseEngineAdapter implements IPoseEventSource {
 /// structure is identical (top/bottom phases, repetition count, feedback).
 final class PushUpPoseAdapter implements IPoseEventSource {
   final PushUpCounter _counter;
+  PushUpSessionIdentity? _identity;
+  PushUpCompletion? _completion;
+
+  PushUpCompletion? get completion => _completion;
   final StreamController<SquatCounterResult> _controller =
       StreamController<SquatCounterResult>.broadcast();
 
@@ -74,12 +91,21 @@ final class PushUpPoseAdapter implements IPoseEventSource {
   final bool isSimulated;
 
   PushUpPoseAdapter({
-    PushUpCounter? counter,
     this.isSimulated = false,
-  }) : _counter = counter ?? PushUpCounter();
+    void Function(String message)? onDiagnostic,
+  }) : _counter = PushUpCounter(onDiagnostic: onDiagnostic);
 
   @override
   Stream<SquatCounterResult> get poseStream => _controller.stream;
+
+  void bindToSession(PushUpSessionIdentity identity) {
+    if (_identity == identity) return;
+    if (_identity != null || identity.repetitions != _counter.targetGoal) {
+      throw StateError('The push-up counter must match one workout session.');
+    }
+    _counter.reset();
+    _identity = identity;
+  }
 
   SquatCounterResult processPose(Pose? pose, {required DateTime timestamp}) {
     final result = _counter.processPose(
@@ -87,14 +113,20 @@ final class PushUpPoseAdapter implements IPoseEventSource {
       timestamp: timestamp,
       isSimulated: isSimulated,
     );
-    if (!_controller.isClosed) _controller.add(result);
+    if (!_controller.isClosed) {
+      final identity = _identity;
+      if (identity != null &&
+          !result.isSimulated &&
+          result.isRepetitionCompleted &&
+          result.repetitionCount == identity.repetitions) {
+        _completion ??= PushUpCompletion._(identity);
+      }
+      _controller.add(result);
+    }
     return result;
   }
 
-  /// Resets the internal push-up counter state machine.
-  void reset() {
-    _counter.reset();
-  }
+  void interruptTracking() => _counter.interruptTracking();
 
   @override
   void dispose() {

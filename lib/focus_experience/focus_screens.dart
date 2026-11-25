@@ -272,13 +272,13 @@ class FocusExerciseSettingsScreen extends StatefulWidget {
     super.key,
     required this.initialSelection,
     required this.onSave,
-    this.allowPushUpUnlock = false,
+    this.supportsPushUps = true,
     this.language = 'ru',
   });
 
   final Set<FocusExerciseId> initialSelection;
   final ValueChanged<Set<FocusExerciseId>> onSave;
-  final bool allowPushUpUnlock;
+  final bool supportsPushUps;
   final String language;
 
   @override
@@ -287,23 +287,20 @@ class FocusExerciseSettingsScreen extends StatefulWidget {
 }
 
 class _FocusExerciseSettingsState extends State<FocusExerciseSettingsScreen> {
-  late Set<FocusExerciseId> selected = widget.initialSelection
+  late final _exercises = focusExercises
       .where(
-        (id) => focusExercises.any(
-          (exercise) =>
-              exercise.id == id &&
-              exercise.canUnlock(allowPushUpUnlock: widget.allowPushUpUnlock),
-        ),
+        (exercise) => exercise.ready &&
+            (widget.supportsPushUps || exercise.id != FocusExerciseId.pushUp),
       )
+      .toList(growable: false);
+  late final Set<FocusExerciseId> selected = widget.initialSelection
+      .where((id) => _exercises.any((exercise) => exercise.id == id))
       .toSet();
 
   @override
   Widget build(BuildContext context) {
     String t(String ru, String en, String kk) =>
         focusTr(widget.language, ru, en, kk);
-    final exercises = focusExercises
-        .where((exercise) => isExerciseAvailableForFreeWorkout(exercise.id))
-        .toList(growable: false);
     return Theme(
       data: FocusStyle.theme(),
       child: Scaffold(
@@ -320,24 +317,26 @@ class _FocusExerciseSettingsState extends State<FocusExerciseSettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  t(
-                    'Выбери упражнения для Focus.',
-                    'Choose exercises for Focus.',
-                    'Focus үшін жаттығуларды таңда.',
-                  ),
-                  style: const TextStyle(color: FocusStyle.muted, fontSize: 14),
-                ),
-                const SizedBox(height: 24),
                 Expanded(
                   child: ListView.separated(
-                    itemCount: exercises.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 9),
+                    itemCount: _exercises.length + 1,
+                    separatorBuilder: (_, index) =>
+                        SizedBox(height: index == 0 ? 24 : 9),
                     itemBuilder: (context, index) {
-                      final exercise = exercises[index];
-                      final enabled = exercise.canUnlock(
-                        allowPushUpUnlock: widget.allowPushUpUnlock,
-                      );
+                      if (index == 0) {
+                        return Text(
+                          t(
+                            'Выбери упражнение для разблокировки. Если выбраны оба, они чередуются.',
+                            'Your selection is required for app unlocks. Select both to alternate.',
+                            'Таңдалған жаттығу қолданбаны ашу үшін қажет. Екеуін таңдасаңыз, олар кезектеседі.',
+                          ),
+                          style: const TextStyle(
+                            color: FocusStyle.muted,
+                            fontSize: 14,
+                          ),
+                        );
+                      }
+                      final exercise = _exercises[index - 1];
                       final checked = selected.contains(exercise.id);
                       return Material(
                         color: FocusStyle.surface,
@@ -357,27 +356,12 @@ class _FocusExerciseSettingsState extends State<FocusExerciseSettingsScreen> {
                           controlAffinity: ListTileControlAffinity.trailing,
                           title: Text(
                             '${exercise.name(widget.language)} · ${exercise.target} ${t('повторений', 'reps', 'рет')}',
-                            style: TextStyle(
-                              color: enabled
-                                  ? FocusStyle.text
-                                  : FocusStyle.muted,
+                            style: const TextStyle(
+                              color: FocusStyle.text,
                               fontSize: 15,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
-                          subtitle: enabled
-                              ? null
-                              : Text(
-                                  t(
-                                    'Разблокировка недоступна в этой сборке',
-                                    'Unlock unavailable in this build',
-                                    'Бұл нұсқада рұқсат ашылмайды',
-                                  ),
-                                  style: const TextStyle(
-                                    color: FocusStyle.muted,
-                                    fontSize: 12,
-                                  ),
-                                ),
                           activeColor: FocusStyle.accent,
                           checkColor: FocusStyle.background,
                           side: const BorderSide(
@@ -385,15 +369,13 @@ class _FocusExerciseSettingsState extends State<FocusExerciseSettingsScreen> {
                             width: 1.5,
                           ),
                           value: checked,
-                          onChanged: enabled
-                              ? (value) => setState(() {
-                                  if (value == true) {
-                                    selected.add(exercise.id);
-                                  } else {
-                                    selected.remove(exercise.id);
-                                  }
-                                })
-                              : null,
+                          onChanged: (value) => setState(() {
+                            if (value == true) {
+                              selected.add(exercise.id);
+                            } else {
+                              selected.remove(exercise.id);
+                            }
+                          }),
                         ),
                       );
                     },

@@ -83,7 +83,7 @@ class CoreInsightsAdapter {
     final excludedSessions = <String>{};
     const rewardPolicy = XpRewardPolicy();
     for (final w in rawWorkouts) {
-      if ((w.exerciseType == ExerciseType.pushUp && !rewardPolicy.evaluate(w).eligible) ||
+      if ((w.exerciseType == ExerciseType.pushUp && !rewardPolicy.evaluatePersistedWorkout(w).eligible) ||
           const {'simulated', 'preview', 'ui_only', 'mock'}.contains(w.source)) {
         excludedSessions.add(w.sessionId);
         continue;

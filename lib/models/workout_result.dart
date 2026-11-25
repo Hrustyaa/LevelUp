@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../core/integration/pose_event_adapter.dart';
+import '../features/challenge/application/push_up_verification.dart';
 import 'challenge_type.dart';
 import 'exercise_type.dart';
 
@@ -8,7 +10,7 @@ import 'exercise_type.dart';
 /// Designed to be consumed downstream by Access Engine (for unlocking apps)
 /// and Progress Engine (for recording streaks and awarding XP).
 @immutable
-class WorkoutResult {
+final class WorkoutResult {
   /// Unique identifier of the session.
   final String sessionId;
 
@@ -48,6 +50,18 @@ class WorkoutResult {
 
   /// Biomechanical verification source (e.g. 'camera', 'test').
   final String source;
+  final PushUpCompletion? pushUpCompletion;
+
+  bool get hasVerifiedPushUpCompletion =>
+      exerciseType == ExerciseType.pushUp &&
+      source == PushUpVerification.verifiedSource &&
+      pushUpCompletion?.identity == (
+        sessionId: sessionId,
+        requestId: requestId,
+        challengeId: challengeId,
+        targetPackage: targetPackage,
+        repetitions: completedRepetitions,
+      );
 
   WorkoutResult({
     required this.sessionId,
@@ -63,6 +77,7 @@ class WorkoutResult {
     required this.accessDurationSeconds,
     this.earnedXp = 50,
     this.source = 'camera',
+    this.pushUpCompletion,
   })  : assert(
           challengeContext != ChallengeType.freeWorkout ||
               (!eligibleForAccess && accessDurationSeconds == 0 && targetPackage == null),

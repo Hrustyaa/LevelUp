@@ -172,6 +172,13 @@ class WorkoutHistoryRepository implements IWorkoutHistoryRepository {
   }
 
   void _validateWorkoutResult(WorkoutResult result) {
+    if (result.source.trim().toLowerCase() == PushUpVerification.verifiedSource &&
+        !result.hasVerifiedPushUpCompletion) {
+      throw const InvalidWorkoutDataException(
+        'A verified push-up record requires its live camera completion.',
+      );
+    }
+
     if (result.sessionId.trim().isEmpty) {
       throw const InvalidWorkoutDataException('sessionId must not be empty.');
     }
@@ -228,8 +235,7 @@ class WorkoutHistoryRepository implements IWorkoutHistoryRepository {
         (row[DatabaseConstants.colVerificationSource] as String?) ?? 'camera';
     final hasReward = source != 'simulated' &&
         (parsedExerciseType == ExerciseType.squats ||
-            (PushUpVerification.physicallyValidated &&
-                source == PushUpVerification.verifiedSource));
+            source == PushUpVerification.verifiedSource);
     return WorkoutResult(
       sessionId: row[DatabaseConstants.colSessionId] as String,
       requestId: (row[DatabaseConstants.colRequestId] as String?) ?? '',

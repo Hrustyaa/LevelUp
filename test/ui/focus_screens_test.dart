@@ -64,9 +64,9 @@ void main() {
       'Отжимания · 5 повторений',
     );
     expect(pushUps, findsOneWidget);
-    expect(tester.widget<CheckboxListTile>(pushUps).onChanged, isNull);
-    expect(find.text('Разблокировка недоступна в этой сборке'), findsOneWidget);
-    await tester.tap(pushUps);
+    expect(tester.widget<CheckboxListTile>(pushUps).onChanged, isNotNull);
+    expect(find.byType(CheckboxListTile), findsNWidgets(2));
+    expect(find.text('Выпады · 5 повторений'), findsNothing);
     await tester.tap(find.text('Сохранить'));
     expect(saved, {FocusExerciseId.squat});
   });

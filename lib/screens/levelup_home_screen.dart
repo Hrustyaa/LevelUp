@@ -3052,6 +3052,11 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
                 '${tr('This week', 'На этой неделе', 'Осы аптада')}: ${stats.workouts.thisWeekCompleted} ${tr('workouts', 'трен.', 'жатт.')} · ${stats.unlocks.allTimeConfirmed} ${tr('total unlocks', 'всего разблок.', 'барлық ашу')}',
                 13,
               ),
+              _gap(4),
+              _sub(
+                '${tr('Verified push-ups', 'Засчитано отжиманий', 'Есептелген қолды бүгіп-жазу')} · ${stats.workouts.verifiedPushUpRepetitions}',
+                12,
+              ),
               _gap(6),
               _sub(
                 '${tr('Authorized access granted', 'Выданный доступ', 'Берілген рұқсат')}: ${_formatDurationShort(stats.accessDuration.totalAuthorizedDuration)} · ${tr('Avg', 'Средн.', 'Орт.')}: $avgLabel',

@@ -3,12 +3,19 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:levelup_test/core/constants/channel_constants.dart';
+import 'package:levelup_test/core/errors/persistence_exceptions.dart';
 import 'package:levelup_test/core/integration/core_integration_coordinator.dart';
 import 'package:levelup_test/core/integration/pose_event_adapter.dart';
+import 'package:levelup_test/data/database/database_constants.dart';
 import 'package:levelup_test/data/database/levelup_database.dart';
 import 'package:levelup_test/data/repositories/access_attempt_repository.dart';
 import 'package:levelup_test/data/repositories/workout_history_repository.dart';
+import 'package:levelup_test/features/achievements/application/achievement_service.dart';
+import 'package:levelup_test/features/achievements/data/achievement_catalog.dart';
+import 'package:levelup_test/features/achievements/data/achievement_repository.dart';
 import 'package:levelup_test/features/challenge/application/challenge_service.dart';
+import 'package:levelup_test/features/developer_lab/di/dev_lab_scope.dart';
+import 'package:levelup_test/features/statistics/application/statistics_service.dart';
 import 'package:levelup_test/features/challenge/application/push_up_verification.dart';
 import 'package:levelup_test/features/challenge/data/challenge_catalog.dart';
 import 'package:levelup_test/features/statistics/data/statistics_repository.dart';
@@ -27,6 +34,41 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../../support/push_up_pose.dart';
+
+DateTime _feedPushUps(PushUpPoseAdapter adapter, int reps, DateTime timestamp) {
+  final top = plank();
+  final bottom = plank(shoulderDrop: 28, hipDrop: 7, elbowDepth: -75);
+  for (final pose in [
+    top, top,
+    for (var rep = 0; rep < reps; rep++) ...[bottom, bottom, top, top],
+  ]) {
+    timestamp = timestamp.add(const Duration(milliseconds: 85));
+    adapter.processPose(pose, timestamp: timestamp);
+  }
+  return timestamp;
+}
+
+WorkoutResult _makePushUpRecord(
+  String sessionId,
+  String source, {
+  bool unlock = false,
+  PushUpCompletion? completion,
+  int reps = 5,
+}) => WorkoutResult(
+  sessionId: sessionId,
+  requestId: 'request-$sessionId',
+  challengeId: unlock ? ChallengeCatalog.pushUpUnlockId : ChallengeCatalog.pushUpFreeWorkoutId,
+  challengeContext: unlock ? ChallengeType.unlockChallenge : ChallengeType.freeWorkout,
+  exerciseType: ExerciseType.pushUp,
+  targetPackage: unlock ? ChannelConstants.targetYouTube : null,
+  completedRepetitions: reps,
+  duration: const Duration(seconds: 20),
+  completedAt: DateTime.now(),
+  eligibleForAccess: unlock,
+  accessDurationSeconds: unlock ? 300 : 0,
+  source: source,
+  pushUpCompletion: completion,
+);
 
 class _FailingProgressRepo implements IProgressRepository {
   @override
@@ -405,53 +447,67 @@ void main() {
       progressService.dispose();
     });
 
-    test('push-up completion uses the debug gate and stays out of production progress', () async {
+    test('camera push-ups earn 50 XP and only the fifth unlock rep grants 300 seconds', () async {
       const bridge = NativeBridge();
       final challengeService = ChallengeService();
       final accessService = AccessService(bridge: bridge);
       final history = WorkoutHistoryRepository(databaseManager: db);
+      final rewards = SqliteProgressRepository(databaseManager: db);
+      var now = DateTime(2026, 11, 23, 10);
       final progress = ProgressService(
-        repository: SqliteProgressRepository(databaseManager: db),
+        repository: rewards,
         historyRepository: history,
+        clock: () => now,
+      );
+      final focus = FocusService(bridge: bridge);
+      final sessionManager = WorkoutSessionManager(
+        challengeService: challengeService,
+        clock: () => now,
       );
       final coordinator = CoreIntegrationCoordinator(
         nativeBridge: bridge,
-        focusService: FocusService(bridge: bridge),
+        focusService: focus,
         challengeService: challengeService,
-        sessionManager: WorkoutSessionManager(challengeService: challengeService),
+        sessionManager: sessionManager,
         accessService: accessService,
         workoutHistoryRepository: history,
         accessAttemptRepository: AccessAttemptRepository(databaseManager: db),
         progressService: progress,
+        clock: () => now,
       );
+      final statsRepo = SqliteStatisticsRepository(databaseManager: db);
+      final stats = StatisticsService(
+        repository: statsRepo, progressService: progress,
+        focusService: focus, clock: () => now,
+      );
+      final achievementsRepo = SqliteAchievementRepository(databaseManager: db);
+      final achievements = AchievementService(
+        repository: achievementsRepo, statisticsService: stats,
+        progressService: progress, clock: () => now,
+      );
+      addTearDown(achievements.dispose);
+      addTearDown(stats.dispose);
       addTearDown(coordinator.dispose);
+      addTearDown(sessionManager.dispose);
+      addTearDown(focus.dispose);
       addTearDown(progress.dispose);
       addTearDown(accessService.dispose);
       await progress.initialize();
 
-      final topPose = plank();
-      final bottomPose = plank(shoulderDrop: 28, hipDrop: 7, elbowDepth: -75);
-      var timestamp = DateTime.utc(2026);
-      Future<void> countPushUps(PushUpPoseAdapter adapter, int reps) async {
-        void frame(pose) {
-          timestamp = timestamp.add(const Duration(milliseconds: 85));
-          adapter.processPose(pose, timestamp: timestamp);
-        }
-
-        frame(topPose);
-        frame(topPose);
-        for (var rep = 0; rep < reps; rep++) {
-          frame(bottomPose);
-          frame(bottomPose);
-          frame(topPose);
-          frame(topPose);
-        }
+      var timestamp = now;
+      PushUpPoseAdapter attach(WorkoutSession session) {
+        final adapter = PushUpPoseAdapter();
+        addTearDown(adapter.dispose);
+        coordinator.attachPoseEventSource(adapter, sessionId: session.sessionId);
+        return adapter;
+      }
+      Future<void> count(PushUpPoseAdapter adapter, int reps) async {
+        timestamp = _feedPushUps(adapter, reps, timestamp);
         await Future<void>.delayed(Duration.zero);
         await coordinator.waitForCompletion();
       }
 
       final free = await coordinator.launchFreeWorkout(exerciseType: ExerciseType.pushUp);
-      // A direct result cannot impersonate the push-up detector.
       await coordinator.handlePoseResult(const SquatCounterResult(
         phase: SquatPhase.up,
         repetitionCount: 5,
@@ -462,20 +518,64 @@ void main() {
         feedbackMessage: 'Direct result',
       ));
       expect(coordinator.currentState.verifiedRepetitions, 0);
-      final freeAdapter = PushUpPoseAdapter();
-      addTearDown(freeAdapter.dispose);
-      coordinator.attachPoseEventSource(freeAdapter, sessionId: free.sessionId);
-      await countPushUps(freeAdapter, 5);
+      await expectLater(
+        coordinator.completeCurrentSession(),
+        throwsA(isA<IneligibleWorkoutContextException>()),
+      );
+      final simulated = PushUpPoseAdapter(isSimulated: true);
+      addTearDown(simulated.dispose);
+      expect(
+        () => coordinator.attachPoseEventSource(simulated, sessionId: free.sessionId),
+        throwsStateError,
+      );
+
+      final freeAdapter = attach(free);
+      await count(freeAdapter, 4);
+      expect(progress.currentState.totalXp, 0);
+      await count(freeAdapter, 1);
+      expect(progress.currentState.totalXp, 50);
       final storedFree = (await history.getWorkoutBySessionId(free.sessionId))!;
-      expect(storedFree.exerciseType, ExerciseType.pushUp);
-      expect(storedFree.source, PushUpVerification.experimentalSource);
-      expect(storedFree.earnedXp, 0);
+      expect(storedFree.source, PushUpVerification.verifiedSource);
+      expect(storedFree.earnedXp, 50);
+      expect((await rewards.getRewardBySessionId(free.sessionId))?.xpAmount, 50);
       await expectLater(
         accessService.grantAccessForCompletedWorkout(storedFree),
         throwsA(isA<IneligibleWorkoutContextException>()),
       );
+      final wrongSession = _makePushUpRecord(
+        'wrong-session', PushUpVerification.verifiedSource,
+        completion: freeAdapter.completion,
+      );
+      expect((await progress.recordCompletedWorkout(wrongSession)).awarded, isFalse);
       expect(grantCount, 0);
+      await stats.refresh();
+      final first = await achievements.evaluateAndRefresh();
+      expect(first.achievements.singleWhere((a) => a.definition.id == AchievementCatalog.firstWorkoutId).isUnlocked, isTrue);
+      expect(first.achievements.singleWhere((a) => a.definition.id == AchievementCatalog.firstUnlockId).isUnlocked, isFalse);
 
+      now = DateTime(2026, 11, 24, 10);
+      final unlock = await coordinator.launchUnlockChallenge(
+        requirePendingRequest: true,
+        exerciseType: ExerciseType.pushUp,
+      );
+      final unlockAdapter = attach(unlock);
+      await count(unlockAdapter, 4);
+      expect(coordinator.currentState.verifiedRepetitions, 4);
+      expect(progress.currentState.totalXp, 50);
+      expect(grantCount, 0);
+      await count(unlockAdapter, 1);
+      await coordinator.completeCurrentSession();
+      expect(grantCount, 1);
+      expect(grantedMinutes, [5]);
+      expect(progress.currentState.totalXp, 100);
+      final storedUnlock = (await history.getWorkoutBySessionId(unlock.sessionId))!;
+      expect(storedUnlock.challengeId, ChallengeCatalog.pushUpUnlockId);
+      expect(storedUnlock.accessDurationSeconds, 300);
+      expect(storedUnlock.source, PushUpVerification.verifiedSource);
+      await expectLater(
+        accessService.grantAccessForCompletedWorkout(storedUnlock),
+        throwsA(isA<IneligibleWorkoutContextException>()),
+      );
       await expectLater(
         accessService.requestAccess(AccessGrantRequest(
           sessionId: 'direct-push-up',
@@ -483,85 +583,134 @@ void main() {
           targetPackage: ChannelConstants.targetYouTube,
           durationMinutes: 5,
           challengeContext: ChallengeType.unlockChallenge,
-          completedAt: DateTime.now(),
+          completedAt: now,
         )),
         throwsA(isA<IneligibleWorkoutContextException>()),
       );
 
-      if (PushUpVerification.testUnlockEnabled) {
-        final unlock = await coordinator.launchUnlockChallenge(
-          requirePendingRequest: true,
-          exerciseType: ExerciseType.pushUp,
-        );
-        final unlockAdapter = PushUpPoseAdapter();
-        addTearDown(unlockAdapter.dispose);
-        coordinator.attachPoseEventSource(unlockAdapter, sessionId: unlock.sessionId);
-        await countPushUps(unlockAdapter, 4);
-        expect(coordinator.currentState.verifiedRepetitions, 4);
-        expect(grantCount, 0);
-        await countPushUps(unlockAdapter, 1);
-        await coordinator.completeCurrentSession();
-        expect(grantCount, 1);
-        expect(grantedMinutes, [5]);
-        final storedUnlock = (await history.getWorkoutBySessionId(unlock.sessionId))!;
-        expect(storedUnlock.challengeId, ChallengeCatalog.pushUpUnlockId);
-        expect(storedUnlock.accessDurationSeconds, 300);
-        expect(storedUnlock.source, PushUpVerification.experimentalSource);
-      } else {
-        await expectLater(
-          coordinator.launchUnlockChallenge(exerciseType: ExerciseType.pushUp),
-          throwsA(isA<InvalidChallengeRequestException>()),
-        );
-        expect(grantCount, 0);
+      now = DateTime(2026, 11, 25, 10);
+      final squat = await coordinator.launchFreeWorkout();
+      final squatAdapter = PoseEngineAdapter();
+      addTearDown(squatAdapter.dispose);
+      coordinator.attachPoseEventSource(squatAdapter, sessionId: squat.sessionId);
+      for (var rep = 0; rep < 5; rep++) {
+        for (final angle in [90.0, 90.0, 170.0, 170.0]) {
+          squatAdapter.processAngle(angle);
+        }
+      }
+      await Future<void>.delayed(Duration.zero);
+      await coordinator.waitForCompletion();
+      for (var i = 0; i < 2; i++) {
+        final extra = await coordinator.launchFreeWorkout(exerciseType: ExerciseType.pushUp);
+        await count(attach(extra), 5);
       }
 
+      // Exercise restart recovery when history persisted but a reward did not.
+      final connection = await db.database;
+      await connection.delete(
+        DatabaseConstants.tableXpRewards,
+        where: '${DatabaseConstants.colSessionId} = ?',
+        whereArgs: [free.sessionId],
+      );
+      expect(await rewards.getTotalXp(), 200);
       await db.close();
-      final reopenedFree = (await history.getWorkoutBySessionId(free.sessionId))!;
-      expect(reopenedFree.exerciseType, ExerciseType.pushUp);
-      expect(reopenedFree.source, PushUpVerification.experimentalSource);
-      final now = DateTime.now();
-      final stats = SqliteStatisticsRepository(databaseManager: db);
-      expect((await stats.loadWorkoutStatistics(now: now)).allTimeCompleted, 0);
-      expect((await stats.loadUnlockStatistics(now: now)).allTimeConfirmed, 0);
-      expect(progress.currentState.totalXp, 0);
       await progress.refresh();
-      expect(progress.currentState.totalXp, 0);
+      expect(progress.currentState.totalXp, 250);
+      expect(progress.currentState.completedWorkoutCount, 5);
+      expect(progress.currentState.streakInfo.currentStreak, 3);
+      final aggregate = await statsRepo.loadWorkoutStatistics(now: now);
+      expect(aggregate.allTimeCompleted, 5);
+      expect(aggregate.squatWorkoutsCompleted, 1);
+      expect(aggregate.pushUpWorkoutsCompleted, 4);
+      expect(aggregate.verifiedSquatRepetitions, 5);
+      expect(aggregate.verifiedPushUpRepetitions, 20);
+      expect(aggregate.thisWeekCompleted, 5);
+      final today = (await statsRepo.loadWeeklyActivity(now: now)).last;
+      expect(today.completedWorkouts, 3);
+      expect(today.verifiedRepetitions, 5);
+      expect(today.verifiedPushUpRepetitions, 10);
+      expect((await statsRepo.loadUnlockStatistics(now: now)).allTimeConfirmed, 1);
+      expect(grantCount, 1);
+      await stats.refresh();
+      final finalAchievements = await achievements.evaluateAndRefresh();
+      expect(finalAchievements.unlockedAchievements.map((a) => a.definition.id), unorderedEquals([
+        AchievementCatalog.firstWorkoutId,
+        AchievementCatalog.fiveWorkoutsId,
+        AchievementCatalog.firstUnlockId,
+        AchievementCatalog.threeDayStreakId,
+        AchievementCatalog.reachLevelTwoId,
+      ]));
+      await achievements.evaluateAndRefresh();
+      expect((await achievementsRepo.getUnlockedRecords()).length, 5);
     });
 
-    test('isolated validated policy awards 50 XP once for the trusted source', () async {
-      final repository = SqliteProgressRepository(databaseManager: db);
+    test('forged source and historical experimental push-ups receive no reward', () async {
+      final history = WorkoutHistoryRepository(databaseManager: db);
+      final rewards = SqliteProgressRepository(databaseManager: db);
+      await rewards.getOrCreateProgressEpochMs(0);
       final progress = ProgressService(
-        repository: repository,
-        policy: const XpRewardPolicy.withValidatedPushUpsForTest(),
+        repository: rewards,
+        historyRepository: history,
       );
       addTearDown(progress.dispose);
+
+      final legacy = _makePushUpRecord('legacy', PushUpVerification.experimentalSource);
+      await history.saveCompletedWorkout(legacy);
       await progress.initialize();
+      expect((await history.getWorkoutBySessionId('legacy'))?.source, PushUpVerification.experimentalSource);
+      expect(progress.currentState.totalXp, 0);
 
-      WorkoutResult pushUp(String id, String source, {int reps = 5}) =>
-          WorkoutResult(
-            sessionId: id,
-            requestId: 'request-$id',
-            challengeId: ChallengeCatalog.pushUpFreeWorkoutId,
-            challengeContext: ChallengeType.freeWorkout,
-            exerciseType: ExerciseType.pushUp,
-            completedRepetitions: reps,
-            duration: const Duration(seconds: 20),
-            completedAt: DateTime.now(),
-            eligibleForAccess: false,
-            accessDurationSeconds: 0,
-            source: source,
-          );
-
-      final verified = pushUp('verified', PushUpVerification.verifiedSource);
-      expect(const XpRewardPolicy().evaluate(verified).eligible, isFalse);
-      expect((await progress.recordCompletedWorkout(verified)).xpAwarded, 50);
-      expect((await progress.recordCompletedWorkout(verified)).duplicate, isTrue);
-      for (final source in [PushUpVerification.experimentalSource, 'camera', 'simulated']) {
-        expect((await progress.recordCompletedWorkout(pushUp(source, source))).awarded, isFalse);
+      final forged = _makePushUpRecord('forged', PushUpVerification.verifiedSource, unlock: true);
+      expect(const XpRewardPolicy().evaluate(forged).eligible, isFalse);
+      await expectLater(history.saveCompletedWorkout(forged), throwsA(isA<InvalidWorkoutDataException>()));
+      expect(() => AccessGrantRequest.fromWorkoutResult(forged), throwsA(isA<IneligibleWorkoutContextException>()));
+      for (final source in [PushUpVerification.experimentalSource, 'camera', 'simulated', 'mock']) {
+        expect((await progress.recordCompletedWorkout(_makePushUpRecord(source, source))).awarded, isFalse);
       }
-      final incomplete = pushUp('incomplete', PushUpVerification.verifiedSource, reps: 4);
+      final incomplete = _makePushUpRecord('incomplete', PushUpVerification.verifiedSource, reps: 4);
       expect((await progress.recordCompletedWorkout(incomplete)).awarded, isFalse);
-      expect(await repository.getTotalXp(), 50);
+      expect((await progress.recordCompletedWorkout(forged)).awarded, isFalse);
+      expect(await rewards.getTotalXp(), 0);
+    });
+
+    test('simulated Developer Lab push-ups never earn XP or call the grant bridge', () async {
+      final bridge = SimulationBridge(challengeRequested: true);
+      final focusService = FocusService(bridge: bridge);
+      final challengeService = ChallengeService();
+      final sessionManager = WorkoutSessionManager(challengeService: challengeService);
+      final accessService = AccessService(bridge: bridge);
+      final history = WorkoutHistoryRepository(databaseManager: db);
+      final access = AccessAttemptRepository(databaseManager: db);
+      final progress = ProgressService(
+        repository: SqliteProgressRepository(databaseManager: db),
+        historyRepository: history,
+      );
+      final coordinator = CoreIntegrationCoordinator(
+        nativeBridge: bridge, focusService: focusService,
+        challengeService: challengeService, sessionManager: sessionManager,
+        accessService: accessService, workoutHistoryRepository: history,
+        accessAttemptRepository: access, progressService: progress,
+      );
+      addTearDown(coordinator.dispose);
+      addTearDown(progress.dispose);
+      addTearDown(accessService.dispose);
+      addTearDown(sessionManager.dispose);
+      addTearDown(focusService.dispose);
+      await progress.initialize();
+      final workout = await coordinator.launchUnlockChallenge(
+        requirePendingRequest: true, exerciseType: ExerciseType.pushUp,
+      );
+      final adapter = PushUpPoseAdapter(isSimulated: true);
+      addTearDown(adapter.dispose);
+      coordinator.attachPoseEventSource(adapter, sessionId: workout.sessionId);
+      _feedPushUps(adapter, 5, DateTime.utc(2026));
+      await Future<void>.delayed(Duration.zero);
+      await coordinator.waitForCompletion();
+      expect(adapter.completion, isNull);
+      expect((await history.getWorkoutBySessionId(workout.sessionId))?.source, 'simulated');
+      expect(await access.getAttemptBySessionId(workout.sessionId), isNull);
+      expect(bridge.callLog.where((call) => call.startsWith('grantAccess')), isEmpty);
+      expect(progress.currentState.totalXp, 0);
     });
 
     test('7. Reward persistence failure does not break or duplicate native grantAccess', () async {

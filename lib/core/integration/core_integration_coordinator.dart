@@ -101,6 +101,7 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
   final Set<String> _completingSessionIds = <String>{};
   Completer<void>? _completionCompleter;
   String? _simulatedSessionId;
+  PushUpCompletion? _pushUpCompletion;
 
   CoreIntegrationCoordinator({
     required INativeBridge nativeBridge,
@@ -167,6 +168,7 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
     // Release any previous terminal session to ensure a clean lifecycle
     final prevSession = _sessionManager.currentSession;
     if (prevSession != null && prevSession.status.isTerminal) {
+      detachPoseEventSource(sessionId: prevSession.sessionId);
       _sessionManager.releaseCurrentSession();
     }
 
@@ -213,6 +215,8 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
 
     // 4. Create and start WorkoutSession via WorkoutSessionManager
     _completionCompleter = null;
+    _pushUpCompletion = null;
+    _simulatedSessionId = null;
     final session = _sessionManager.createSession(challengeRequest);
     final startedSession = _sessionManager.startSession(session.sessionId);
 
@@ -252,6 +256,7 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
     // Release any previous terminal session to ensure a clean lifecycle
     final prevSession = _sessionManager.currentSession;
     if (prevSession != null && prevSession.status.isTerminal) {
+      detachPoseEventSource(sessionId: prevSession.sessionId);
       _sessionManager.releaseCurrentSession();
     }
 
@@ -263,6 +268,8 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
 
     // 2. Create and start WorkoutSession without targetPackage
     _completionCompleter = null;
+    _pushUpCompletion = null;
+    _simulatedSessionId = null;
     final session = _sessionManager.createSession(challengeRequest);
     final startedSession = _sessionManager.startSession(session.sessionId);
 
@@ -294,15 +301,24 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
     }
 
     final session = _sessionManager.currentSession;
-    final pushUps = source is PushUpPoseAdapter;
+    final pushUpAdapter = source is PushUpPoseAdapter ? source : null;
     if (sessionId != null &&
         (session?.sessionId != sessionId ||
             session!.status != WorkoutSessionStatus.active ||
-            pushUps != (session.exerciseType == ExerciseType.pushUp))) {
+            (pushUpAdapter != null) != (session.exerciseType == ExerciseType.pushUp))) {
       throw StateError('The pose source does not match the active workout.');
     }
-    if (pushUps && sessionId == null) {
-      throw StateError('A push-up pose source requires its active session ID.');
+    if (pushUpAdapter != null) {
+      if (sessionId == null || session == null) {
+        throw StateError('A push-up pose source requires its active session ID.');
+      }
+      pushUpAdapter.bindToSession((
+        sessionId: session.sessionId,
+        requestId: session.requestId,
+        challengeId: session.challengeId,
+        targetPackage: session.targetPackage,
+        repetitions: session.targetRepetitions,
+      ));
     }
 
     detachPoseEventSource();
@@ -315,7 +331,7 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
         await _handlePoseResult(
           result,
           poseSessionId: sessionId,
-          fromPushUpCamera: pushUps,
+          pushUpAdapter: pushUpAdapter,
         );
       } catch (_) {
         // Exception state is preserved in currentState.errorMessage and SQLite journal
@@ -341,7 +357,7 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
     SquatCounterResult result, {
     String? eventId,
     String? poseSessionId,
-    bool fromPushUpCamera = false,
+    PushUpPoseAdapter? pushUpAdapter,
   }) async {
     if (_nativeBridge is NativeBridge && result.isSimulated) {
       throw StateError(
@@ -352,9 +368,9 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
     final activeSession = _sessionManager.currentSession;
     if (activeSession == null) return null;
     // A live route accepts only its attached counter. Push-ups always require
-    // the session-bound push-up detector, even in the debug configuration.
+    // the session-bound push-up detector.
     if ((_poseSessionId != null && poseSessionId != _poseSessionId) ||
-        (activeSession.exerciseType == ExerciseType.pushUp) != fromPushUpCamera) {
+        (activeSession.exerciseType == ExerciseType.pushUp) != (pushUpAdapter != null)) {
       return activeSession;
     }
 
@@ -389,6 +405,17 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
 
     // Only update progress when cumulative count increases monotonically
     if (result.repetitionCount > activeSession.verifiedRepetitions) {
+      if (pushUpAdapter != null &&
+          !result.isSimulated &&
+          result.repetitionCount >= activeSession.targetRepetitions) {
+        final completion = pushUpAdapter.completion;
+        if (!result.isRepetitionCompleted ||
+            completion?.identity.sessionId != activeSession.sessionId ||
+            completion?.identity.repetitions != result.repetitionCount) {
+          return activeSession;
+        }
+        _pushUpCompletion = completion;
+      }
       final updated = _sessionManager.updateVerifiedProgress(
         activeSession.sessionId,
         cumulativeReps: result.repetitionCount,
@@ -457,6 +484,14 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
       throw const UnknownSessionException('No active workout session to complete.');
     }
 
+    if (session.exerciseType == ExerciseType.pushUp &&
+        _pushUpCompletion?.identity.sessionId != session.sessionId &&
+        _simulatedSessionId != session.sessionId) {
+      throw const IneligibleWorkoutContextException(
+        message: 'Push-up completion requires its live camera counter.',
+      );
+    }
+
     if (session.status != WorkoutSessionStatus.completed) {
       _sessionManager.completeSession(session.sessionId);
     }
@@ -512,13 +547,20 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
       if (_simulatedSessionId == sessionId) {
         source = 'simulated';
       } else if (session.exerciseType == ExerciseType.pushUp) {
-        source = PushUpVerification.physicallyValidated
-            ? PushUpVerification.verifiedSource
-            : PushUpVerification.experimentalSource;
+        source = PushUpVerification.verifiedSource;
       } else {
         source = 'camera';
       }
-      final workoutResult = session.toWorkoutResult(source: source);
+      final workoutResult = session.toWorkoutResult(
+        source: source,
+        pushUpCompletion: _pushUpCompletion,
+      );
+      if (source == PushUpVerification.verifiedSource &&
+          !workoutResult.hasVerifiedPushUpCompletion) {
+        throw const IneligibleWorkoutContextException(
+          message: 'Push-up completion requires its live camera counter.',
+        );
+      }
 
       // 2. Persist completed workout result in SQLite
       await _workoutHistoryRepository.saveCompletedWorkout(workoutResult);
@@ -542,10 +584,8 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
       }
 
       if (session.exerciseType == ExerciseType.pushUp &&
-          !PushUpVerification.canGrantAccess(workoutResult.source)) {
-        throw const IneligibleWorkoutContextException(
-          message: 'Push-up verification is ineligible for app access.',
-        );
+          !workoutResult.hasVerifiedPushUpCompletion) {
+        return;
       }
 
       // 4. Unlock Challenge: execute access grant workflow

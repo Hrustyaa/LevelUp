@@ -12,6 +12,10 @@ class WorkoutStatistics {
   /// Completed workouts in the current local calendar week (Monday–Sunday).
   final int thisWeekCompleted;
 
+  final int squatWorkoutsCompleted;
+  final int pushUpWorkoutsCompleted;
+  final int verifiedPushUpRepetitions;
+
   /// Total verified squat repetitions across all completed workouts.
   final int totalVerifiedRepetitions;
 
@@ -26,9 +30,14 @@ class WorkoutStatistics {
     this.todayCompleted = 0,
     this.thisWeekCompleted = 0,
     this.totalVerifiedRepetitions = 0,
+    this.squatWorkoutsCompleted = 0,
+    this.pushUpWorkoutsCompleted = 0,
+    this.verifiedPushUpRepetitions = 0,
     this.unlockChallengesCompleted = 0,
     this.freeWorkoutsCompleted = 0,
   });
+
+  int get verifiedSquatRepetitions => totalVerifiedRepetitions;
 
   /// Alias for [allTimeCompleted] for consumer convenience.
   int get totalCompleted => allTimeCompleted;

@@ -1,12 +1,11 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../features/challenge/application/push_up_verification.dart';
 import '../models/exercise_type.dart';
 import '../test_kit/squat_counter.dart';
 
 /// Exercise catalogue used by Focus Gate. This file contains NO camera/ML logic.
 /// `ready` is a product capability, not a label that the UI may toggle.
-/// Enabling new exercises requires a verified detector from the native team.
+/// Each ready exercise must have a live camera counter.
 enum FocusExerciseId { squat, pushUp, lunge, jumpingJack, plank }
 
 class FocusExercise {
@@ -28,12 +27,6 @@ class FocusExercise {
 
   ExerciseType get unlockType =>
       id == FocusExerciseId.pushUp ? ExerciseType.pushUp : ExerciseType.squats;
-
-  bool canUnlock({bool allowPushUpUnlock = false}) =>
-      ready ||
-      (id == FocusExerciseId.pushUp &&
-          allowPushUpUnlock &&
-          PushUpVerification.unlockEnabled);
 
   String name(String lang) => switch (lang) {
     'en' => nameEn,
@@ -70,7 +63,7 @@ const focusExercises = <FocusExercise>[
     nameEn: 'Push-ups',
     nameKk: 'Қолды бүгіп-жазу',
     target: 5,
-    ready: false,
+    ready: true,
   ),
   FocusExercise(
     id: FocusExerciseId.lunge,
@@ -105,14 +98,9 @@ FocusExercise? nextFocusExercise({
   required Set<FocusExerciseId> selected,
   FocusExerciseId? previous,
   List<FocusExercise> catalogue = focusExercises,
-  bool allowPushUpUnlock = false,
 }) {
   final eligible = catalogue
-      .where(
-        (exercise) =>
-            exercise.canUnlock(allowPushUpUnlock: allowPushUpUnlock) &&
-            selected.contains(exercise.id),
-      )
+      .where((exercise) => exercise.ready && selected.contains(exercise.id))
       .toList(growable: false);
   if (eligible.isEmpty) return null;
   final index = eligible.indexWhere((exercise) => exercise.id == previous);
@@ -122,22 +110,26 @@ FocusExercise? nextFocusExercise({
 class FocusExercisePreferences {
   const FocusExercisePreferences(
     this.preferences, {
-    this.allowPushUpUnlock = false,
+    this.supportsPushUps = true,
   });
 
-  final bool allowPushUpUnlock;
+  final bool supportsPushUps;
 
   final SharedPreferences preferences;
   static const _selectionKey = 'levelup.focus.exercise_selection';
   static const _lastAssignmentKey = 'levelup.focus.last_exercise';
 
+  Iterable<FocusExercise> get _available => focusExercises.where(
+    (exercise) =>
+        exercise.ready &&
+        (supportsPushUps || exercise.id != FocusExerciseId.pushUp),
+  );
+
   Set<FocusExerciseId> get selected {
     final saved = preferences.getStringList(_selectionKey) ?? const [];
     final enabled = {
-      for (final exercise in focusExercises)
-        if (exercise.canUnlock(allowPushUpUnlock: allowPushUpUnlock) &&
-            saved.contains(exercise.id.name))
-          exercise.id,
+      for (final exercise in _available)
+        if (saved.contains(exercise.id.name)) exercise.id,
     };
     if (enabled.isNotEmpty) return enabled;
     return {
@@ -149,10 +141,8 @@ class FocusExercisePreferences {
 
   Future<bool> save(Set<FocusExerciseId> selection) {
     final ready = [
-      for (final exercise in focusExercises)
-        if (exercise.canUnlock(allowPushUpUnlock: allowPushUpUnlock) &&
-            selection.contains(exercise.id))
-          exercise.id.name,
+      for (final exercise in _available)
+        if (selection.contains(exercise.id)) exercise.id.name,
     ];
     if (ready.isEmpty) return Future.value(false);
     return preferences.setStringList(_selectionKey, ready);
@@ -162,7 +152,6 @@ class FocusExercisePreferences {
     final last = preferences.getString(_lastAssignmentKey);
     return nextFocusExercise(
       selected: selected,
-      allowPushUpUnlock: allowPushUpUnlock,
       previous: FocusExerciseId.values
           .where((id) => id.name == last)
           .firstOrNull,
@@ -174,8 +163,6 @@ class FocusExercisePreferences {
 }
 
 /// Returns true when [id] is available for Free Workout sessions.
-/// Push-ups are allowed in Free Workout even though [FocusExercise.ready] is
-/// false for the Focus unlock challenge rotation.
 bool isExerciseAvailableForFreeWorkout(FocusExerciseId id) {
   return id == FocusExerciseId.squat || id == FocusExerciseId.pushUp;
 }

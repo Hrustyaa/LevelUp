@@ -114,7 +114,7 @@ class _ProductionChallengeScreenState extends State<ProductionChallengeScreen>
 
     if (_controller.isFreeWorkoutCompleted) {
       final exerciseName = _controller.exerciseType == ExerciseType.pushUp
-          ? focusTr(widget.language, 'отжиманий', 'push-ups', 'жатып тіреліс')
+          ? focusTr(widget.language, 'отжиманий', 'push-ups', 'қолды бүгіп-жазу')
           : focusTr(widget.language, 'приседаний', 'squats', 'отырып-тұру');
       return Theme(
         data: FocusStyle.theme(),

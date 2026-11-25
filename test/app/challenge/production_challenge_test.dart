@@ -15,13 +15,13 @@ import 'package:levelup_test/data/database/levelup_database.dart';
 import 'package:levelup_test/data/repositories/access_attempt_repository.dart';
 import 'package:levelup_test/data/repositories/workout_history_repository.dart';
 import 'package:levelup_test/features/challenge/application/challenge_service.dart';
-import 'package:levelup_test/features/challenge/application/push_up_verification.dart';
 import 'package:levelup_test/features/challenge/application/workout_session_manager.dart';
 import 'package:levelup_test/features/focus/application/focus_service.dart';
 import 'package:levelup_test/features/settings/application/camera_permission_checker.dart';
 import 'package:levelup_test/features/settings/application/settings_service.dart';
 import 'package:levelup_test/features/settings/data/settings_repository.dart';
 import 'package:levelup_test/features/settings/models/camera_permission_status.dart';
+import 'package:levelup_test/focus_experience/focus_exercises.dart';
 import 'package:levelup_test/focus_experience/focus_screens.dart';
 import 'package:levelup_test/main_ui.dart';
 import 'package:levelup_test/models/access_attempt_record.dart';
@@ -427,7 +427,7 @@ void main() {
       await tester.pump();
     });
 
-    testWidgets('saved Focus push-ups only route to a push-up camera in the enabled build', (tester) async {
+    testWidgets('saved Focus push-ups route to the push-up camera in the normal build', (tester) async {
       SharedPreferences.setMockInitialValues({
         'levelup.onboarding.completed': true,
         'levelup.welcome.language': 'en',
@@ -445,9 +445,7 @@ void main() {
       await tester.pump(const Duration(seconds: 6));
       await tester.pumpAndSettle();
 
-      final expected = PushUpVerification.testUnlockEnabled
-          ? ExerciseType.pushUp
-          : ExerciseType.squats;
+      const expected = ExerciseType.pushUp;
       final screen = tester.widget<ProductionChallengeScreen>(
         find.byType(ProductionChallengeScreen),
       );
@@ -456,6 +454,11 @@ void main() {
       expect(scope.coordinator.currentState.challenge?.exerciseType, expected);
       expect(consumeCount, 1);
       expect(grantCount, 0);
+      final prefs = FocusExercisePreferences(await SharedPreferences.getInstance());
+      expect(await prefs.save({FocusExerciseId.squat}), isTrue);
+      await tester.pump();
+      expect(scope.coordinator.currentState.sessionId, screen.unlockSessionId);
+      expect(scope.coordinator.currentState.challenge?.exerciseType, ExerciseType.pushUp);
 
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
       await tester.pump(const Duration(seconds: 6));
@@ -561,6 +564,56 @@ void main() {
       expect(grantCount, 1);
 
       controller.dispose();
+    });
+
+    test('five frontal push-ups through the camera controller grant access once', () async {
+      List<Pose> poses = [];
+      var timestamp = DateTime.now();
+      final unusedSquatAdapter = _CountingSquatAdapter();
+      addTearDown(unusedSquatAdapter.dispose);
+      final controller = ProductionChallengeController(
+        coordinator: scope.coordinator,
+        cameraPermissionChecker: cameraChecker,
+        nativeBridge: scope.nativeBridge,
+        isUnlockChallenge: true,
+        exerciseType: ExerciseType.pushUp,
+        poseAdapter: unusedSquatAdapter,
+        availableCamerasOverride: () async => [],
+        poseProcessorOverride: (_) async => poses,
+        clock: () => timestamp,
+      );
+      addTearDown(controller.dispose);
+      await controller.start();
+      final top = plank();
+      final bottom = plank(shoulderDrop: 28, hipDrop: 7, elbowDepth: -75);
+      Future<void> feed(Pose pose) async {
+        poses = [pose];
+        timestamp = timestamp.add(const Duration(milliseconds: 85));
+        await controller.processInputImage(_dummyInputImage());
+      }
+
+      await feed(top);
+      await feed(top);
+      for (var rep = 1; rep <= 5; rep++) {
+        for (final pose in [bottom, bottom, top, top]) {
+          await feed(pose);
+        }
+        await Future<void>.delayed(Duration.zero);
+        if (rep < 5) {
+          expect(controller.repetitions, rep);
+          expect(grantCount, 0);
+        }
+      }
+      await scope.coordinator.waitForCompletion();
+      await Future<void>.delayed(Duration.zero);
+      await feed(bottom);
+      expect(unusedSquatAdapter.frames, 0);
+      expect(controller.repetitions, 5);
+      expect(controller.isUnlockConfirmed, isTrue);
+      expect(controller.grantedMinutes, 5);
+      expect(grantCount, 1);
+      expect(grantedMinutesArgs, [5]);
+      expect(historyRepo.saved.single.hasVerifiedPushUpCompletion, isTrue);
     });
 
     test('5. Free Workout completes 5/5 squats without ever calling grantAccess', () async {

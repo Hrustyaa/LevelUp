@@ -3,7 +3,6 @@ import 'package:flutter/foundation.dart';
 import '../core/constants/channel_constants.dart';
 import '../core/errors/access_exceptions.dart';
 import '../features/challenge/data/challenge_catalog.dart';
-import '../features/challenge/application/push_up_verification.dart';
 import 'exercise_type.dart';
 import 'challenge_type.dart';
 import 'workout_result.dart';
@@ -89,7 +88,7 @@ class AccessGrantRequest {
     }
 
     if (result.exerciseType == ExerciseType.pushUp &&
-        !PushUpVerification.canGrantAccess(result.source)) {
+        !result.hasVerifiedPushUpCompletion) {
       throw const IneligibleWorkoutContextException(
         message: 'Push-up verification is ineligible for app access.',
       );

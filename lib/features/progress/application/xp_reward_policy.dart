@@ -1,5 +1,3 @@
-import 'package:flutter/foundation.dart' show visibleForTesting;
-
 import '../../../models/challenge_type.dart';
 import '../../../models/exercise_type.dart';
 import '../../../models/workout_result.dart';
@@ -42,23 +40,27 @@ class XpRewardPolicy {
   final int baseWorkoutXp;
   final int minimumRepetitions;
   final Set<String> allowedSources;
-  final bool _validatedPushUps;
 
   const XpRewardPolicy({
     this.baseWorkoutXp = defaultBaseWorkoutXp,
     this.minimumRepetitions = defaultMinimumRepetitions,
     this.allowedSources = defaultAllowedSources,
-  }) : _validatedPushUps = PushUpVerification.physicallyValidated;
+  });
 
-  /// Exercises the future policy in an isolated test reward ledger.
-  @visibleForTesting
-  const XpRewardPolicy.withValidatedPushUpsForTest()
-    : baseWorkoutXp = defaultBaseWorkoutXp,
-      minimumRepetitions = defaultMinimumRepetitions,
-      allowedSources = defaultAllowedSources,
-      _validatedPushUps = true;
+  XpRewardDecision evaluate(WorkoutResult result) =>
+      _evaluate(result, verifiedPushUp: result.hasVerifiedPushUpCompletion);
 
-  XpRewardDecision evaluate(WorkoutResult result) {
+  /// SQLite accepts the reserved push-up source only after checking live
+  /// completion evidence. This path is used for durable history and recovery.
+  XpRewardDecision evaluatePersistedWorkout(WorkoutResult result) => _evaluate(
+    result,
+    verifiedPushUp: result.source == PushUpVerification.verifiedSource,
+  );
+
+  XpRewardDecision _evaluate(
+    WorkoutResult result, {
+    required bool verifiedPushUp,
+  }) {
     if (result.sessionId.trim().isEmpty) {
       return const XpRewardDecision(
         eligible: false,
@@ -78,8 +80,7 @@ class XpRewardPolicy {
 
     final normalizedSource = result.source.trim().toLowerCase();
     final trusted = result.exerciseType == ExerciseType.pushUp
-        ? _validatedPushUps &&
-              normalizedSource == PushUpVerification.verifiedSource
+        ? verifiedPushUp
         : normalizedSource.isNotEmpty &&
               !_unverifiedSources.contains(normalizedSource) &&
               allowedSources.contains(normalizedSource) &&

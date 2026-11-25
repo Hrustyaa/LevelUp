@@ -209,7 +209,7 @@ class ProgressService implements IProgressService {
       if (workout.completedAt.toUtc().millisecondsSinceEpoch < epochMs) {
         continue;
       }
-      final decision = _policy.evaluate(workout);
+      final decision = _policy.evaluatePersistedWorkout(workout);
       if (!decision.eligible) continue;
 
       await _repository.recordRewardIfAbsent(

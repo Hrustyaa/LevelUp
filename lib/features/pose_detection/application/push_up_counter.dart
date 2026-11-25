@@ -30,7 +30,7 @@ abstract final class PushUpThresholds {
 /// structurally identical (top ↔ [SquatPhase.up], bottom ↔ [SquatPhase.down]).
 ///
 /// Live camera frames are evaluated with [processPose].
-class PushUpCounter {
+final class PushUpCounter {
   final int targetGoal;
   final void Function(String message)? onDiagnostic;
 

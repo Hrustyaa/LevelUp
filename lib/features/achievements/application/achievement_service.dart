@@ -190,7 +190,7 @@ class AchievementService implements IAchievementService {
   }) {
     final raw = switch (def.category) {
       AchievementCategory.workouts => stats.workouts.allTimeCompleted,
-      AchievementCategory.repetitions => stats.workouts.totalVerifiedRepetitions,
+      AchievementCategory.repetitions => stats.workouts.verifiedSquatRepetitions,
       AchievementCategory.unlocks => stats.unlocks.allTimeConfirmed,
       AchievementCategory.streaks => progress.longestStreak,
       AchievementCategory.levels => progress.level,

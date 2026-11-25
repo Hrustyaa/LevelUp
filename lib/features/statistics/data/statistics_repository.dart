@@ -39,9 +39,8 @@ class SqliteStatisticsRepository implements IStatisticsRepository {
   static const String _trustedWorkoutFilter = """
     ((${DatabaseConstants.colExerciseType} = 'squats'
        AND $_legacySquatSourceFilter)
-      OR (${PushUpVerification.physicallyValidated ? 1 : 0} = 1
-       AND ${DatabaseConstants.colExerciseType} = 'pushUp'
-       AND ${DatabaseConstants.colCompletedRepetitions} >= 5
+      OR (${DatabaseConstants.colExerciseType} = 'pushUp'
+       AND ${DatabaseConstants.colCompletedRepetitions} = 5
        AND ${DatabaseConstants.colVerificationSource} IS '${PushUpVerification.verifiedSource}'))
     """;
 
@@ -76,6 +75,12 @@ class SqliteStatisticsRepository implements IStatisticsRepository {
            AND ${DatabaseConstants.colCompletedAt} < ?
           THEN ${DatabaseConstants.colSessionId}
         END) AS week_completed,
+        COUNT(CASE WHEN ${DatabaseConstants.colExerciseType} = 'squats'
+          THEN 1 END) AS squat_workouts,
+        COUNT(CASE WHEN ${DatabaseConstants.colExerciseType} = 'pushUp'
+          THEN 1 END) AS push_up_workouts,
+        COALESCE(SUM(CASE WHEN ${DatabaseConstants.colExerciseType} = 'pushUp'
+          THEN ${DatabaseConstants.colCompletedRepetitions} ELSE 0 END), 0) AS push_up_reps,
         COALESCE(SUM(CASE
           WHEN ${DatabaseConstants.colExerciseType} = 'squats'
           THEN ${DatabaseConstants.colCompletedRepetitions}
@@ -107,6 +112,9 @@ class SqliteStatisticsRepository implements IStatisticsRepository {
       todayCompleted: _asInt(row['today_completed']),
       thisWeekCompleted: _asInt(row['week_completed']),
       totalVerifiedRepetitions: _asInt(row['total_reps']),
+      squatWorkoutsCompleted: _asInt(row['squat_workouts']),
+      pushUpWorkoutsCompleted: _asInt(row['push_up_workouts']),
+      verifiedPushUpRepetitions: _asInt(row['push_up_reps']),
       unlockChallengesCompleted: _asInt(row['unlock_challenges']),
       freeWorkoutsCompleted: _asInt(row['free_workouts']),
     );
@@ -244,7 +252,8 @@ class SqliteStatisticsRepository implements IStatisticsRepository {
     final unlockRows = results[1];
 
     final workoutCounts = <String, int>{};
-    final repCounts = <String, int>{};
+    final squatRepCounts = <String, int>{};
+    final pushUpRepCounts = <String, int>{};
     final seenWorkouts = <String>{};
 
     for (final row in workoutRows) {
@@ -257,10 +266,11 @@ class SqliteStatisticsRepository implements IStatisticsRepository {
       ).toLocal();
       final key = StatisticsCalendar.formatLocalDate(localDate);
       workoutCounts[key] = (workoutCounts[key] ?? 0) + 1;
-      if (row[DatabaseConstants.colExerciseType] == 'squats') {
-        final reps = _asInt(row[DatabaseConstants.colCompletedRepetitions]);
-        repCounts[key] = (repCounts[key] ?? 0) + reps;
-      }
+      final repCounts = row[DatabaseConstants.colExerciseType] == 'squats'
+          ? squatRepCounts
+          : pushUpRepCounts;
+      final reps = _asInt(row[DatabaseConstants.colCompletedRepetitions]);
+      repCounts[key] = (repCounts[key] ?? 0) + reps;
     }
 
     final unlockCounts = <String, int>{};
@@ -285,7 +295,8 @@ class SqliteStatisticsRepository implements IStatisticsRepository {
         dateKey: key,
         completedWorkouts: workoutCounts[key] ?? 0,
         confirmedUnlocks: unlockCounts[key] ?? 0,
-        verifiedRepetitions: repCounts[key] ?? 0,
+        verifiedRepetitions: squatRepCounts[key] ?? 0,
+        verifiedPushUpRepetitions: pushUpRepCounts[key] ?? 0,
       );
     }).toList(growable: false);
   }
