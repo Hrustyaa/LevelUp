@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../features/progress/models/level_info.dart';
 import '../features/progress/models/streak_info.dart';
 import '../features/progress/models/xp_reward_record.dart';
+import '../features/statistics/models/statistics_snapshot.dart';
 import 'levelup_permissions.dart';
 
 enum DashboardLanguage { en, ru, kk }
@@ -216,6 +217,8 @@ class DashboardInsights {
     this.completedWorkoutCount,
     this.recentRewards = const [],
     this.progressError,
+    this.statistics,
+    this.statisticsError,
     this.week = const [],
     this.events = const [],
     this.usageByApp = const {},
@@ -229,6 +232,8 @@ class DashboardInsights {
   final int? completedWorkoutCount;
   final List<XpRewardRecord> recentRewards;
   final String? progressError;
+  final StatisticsSnapshot? statistics;
+  final String? statisticsError;
   final List<UsageDay> week;
   final List<ActivityEntry> events;
   final Map<String, int> usageByApp;

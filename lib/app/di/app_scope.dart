@@ -107,6 +107,7 @@ class AppScope {
           historyRepo: workoutHistoryRepository,
           accessRepo: accessAttemptRepository,
           progressService: this.progressService,
+          statisticsService: statisticsService,
         );
   }
 

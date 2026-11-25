@@ -667,6 +667,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
       onSaveFocusDraft: _saveFocusDraft,
       refreshToken: _homeRefreshToken,
       progressStream: _scope?.progressService.stateStream,
+      statisticsStream: _scope?.statisticsService.snapshotStream,
       soundFeedbackEnabled: settings?.soundFeedbackEnabled,
       diagnosticLoggingEnabled: settings?.diagnosticLoggingEnabled,
       onSoundFeedbackChanged: _scope != null ? _updateSoundFeedback : null,

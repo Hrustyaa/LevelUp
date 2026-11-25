@@ -7,6 +7,8 @@ import '../../features/progress/models/level_info.dart';
 import '../../features/progress/models/progress_state.dart';
 import '../../features/progress/models/streak_info.dart';
 import '../../features/progress/models/xp_reward_record.dart';
+import '../../features/statistics/application/statistics_service.dart';
+import '../../features/statistics/models/statistics_snapshot.dart';
 import '../../models/access_attempt_record.dart';
 import '../../models/challenge_type.dart';
 import '../../models/workout_result.dart';
@@ -20,16 +22,19 @@ class CoreInsightsAdapter {
   final IWorkoutHistoryRepository _historyRepo;
   final IAccessAttemptRepository _accessRepo;
   final IProgressService? _progressService;
+  final IStatisticsService? _statisticsService;
   final DateTime Function() _clock;
 
   CoreInsightsAdapter({
     required IWorkoutHistoryRepository historyRepo,
     required IAccessAttemptRepository accessRepo,
     IProgressService? progressService,
+    IStatisticsService? statisticsService,
     DateTime Function()? clock,
   })  : _historyRepo = historyRepo,
         _accessRepo = accessRepo,
         _progressService = progressService,
+        _statisticsService = statisticsService,
         _clock = clock ?? DateTime.now;
 
   Future<DashboardInsights> loadInsights([Set<String>? packageIds]) async {
@@ -45,6 +50,16 @@ class CoreInsightsAdapter {
     final rawWorkouts = results[0] as List<WorkoutResult>;
     final rawAttempts = results[1] as List<AccessAttemptRecord>;
     final progressState = results[2] as ProgressState?;
+
+    StatisticsSnapshot? statisticsSnapshot;
+    String? statisticsError;
+    if (_statisticsService != null) {
+      try {
+        statisticsSnapshot = await _statisticsService.refresh();
+      } catch (e) {
+        statisticsError = '$e';
+      }
+    }
 
     // Deduplicate by sessionId to guarantee zero double-counting.
     final workoutsBySession = <String, WorkoutResult>{};
@@ -158,14 +173,16 @@ class CoreInsightsAdapter {
 
     return DashboardInsights(
       todayUsageMinutes: null, // OS screen time honestly unavailable
-      todayUnlocks: todayUnlocks,
-      todayWorkouts: todayWorkouts,
+      todayUnlocks: statisticsSnapshot?.unlocks.todayConfirmed ?? todayUnlocks,
+      todayWorkouts: statisticsSnapshot?.workouts.todayCompleted ?? todayWorkouts,
       totalXp: totalXp,
       levelInfo: levelInfo,
       streakInfo: streakInfo,
       completedWorkoutCount: completedWorkoutCount,
       recentRewards: recentRewards,
       progressError: progressState?.errorMessage,
+      statistics: statisticsSnapshot,
+      statisticsError: statisticsError ?? statisticsSnapshot?.errorMessage,
       week: const [],
       events: events,
       usageByApp: const {},

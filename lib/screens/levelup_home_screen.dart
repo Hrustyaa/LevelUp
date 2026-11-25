@@ -6,6 +6,8 @@ import 'package:material_ui/material_ui.dart';
 
 import '../data/dashboard_data.dart';
 import '../features/progress/models/progress_state.dart';
+import '../features/statistics/models/daily_activity_stats.dart';
+import '../features/statistics/models/statistics_snapshot.dart';
 import 'levelup_focus_setup_screen.dart';
 
 const _bg = Color(0xFF0A0F10),
@@ -40,6 +42,7 @@ class LevelUpHomeScreen extends StatefulWidget {
     this.onBreakCompleted,
     this.refreshToken = 0,
     this.progressStream,
+    this.statisticsStream,
     this.soundFeedbackEnabled,
     this.diagnosticLoggingEnabled,
     this.onSoundFeedbackChanged,
@@ -67,6 +70,7 @@ class LevelUpHomeScreen extends StatefulWidget {
   final ValueChanged<DateTime>? onBreakCompleted;
   final int refreshToken;
   final Stream<ProgressState>? progressStream;
+  final Stream<StatisticsSnapshot>? statisticsStream;
   final bool? soundFeedbackEnabled, diagnosticLoggingEnabled;
   final Future<void> Function(bool)? onSoundFeedbackChanged,
       onDiagnosticLoggingChanged;
@@ -91,6 +95,8 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
   Timer? _ticker;
   StreamSubscription<ProgressState>? _progressSub;
   Object? _lastProgressSignature;
+  StreamSubscription<StatisticsSnapshot>? _statisticsSub;
+  Object? _lastStatisticsSignature;
   DateTime _now = DateTime.now();
   final _countdown = ValueNotifier(DateTime.now());
   int _seconds = 0;
@@ -107,6 +113,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _bindProgressStream();
+    _bindStatisticsStream();
     _refresh();
     _startTicker();
   }
@@ -142,6 +149,29 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     });
   }
 
+  Object _signatureFromStatistics(StatisticsSnapshot snap) => (
+    snap.workouts.allTimeCompleted,
+    snap.workouts.todayCompleted,
+    snap.workouts.thisWeekCompleted,
+    snap.workouts.totalVerifiedRepetitions,
+    snap.unlocks.allTimeConfirmed,
+    snap.unlocks.todayConfirmed,
+    snap.accessDuration.totalAuthorizedDuration.inSeconds,
+    snap.weeklyActivity.fold<int>(0, (s, d) => s + d.completedWorkouts),
+    snap.errorMessage,
+  );
+
+  void _bindStatisticsStream() {
+    _statisticsSub?.cancel();
+    _statisticsSub = widget.statisticsStream?.listen((snap) {
+      if (!mounted || snap.isLoading || _refreshing) return;
+      final sig = _signatureFromStatistics(snap);
+      if (sig == _lastStatisticsSignature) return;
+      _lastStatisticsSignature = sig;
+      _refresh();
+    });
+  }
+
   @override
   void didUpdateWidget(covariant LevelUpHomeScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -151,6 +181,9 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     }
     if (oldWidget.progressStream != widget.progressStream) {
       _bindProgressStream();
+    }
+    if (oldWidget.statisticsStream != widget.statisticsStream) {
+      _bindStatisticsStream();
     }
     if (oldWidget.gateway != widget.gateway ||
         oldWidget.loadInsights != widget.loadInsights ||
@@ -202,6 +235,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _ticker?.cancel();
     _progressSub?.cancel();
+    _statisticsSub?.cancel();
     _insightState.dispose();
     _countdown.dispose();
     for (final s in _scrolls.values) {
@@ -245,6 +279,11 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       ]);
       if (!quiet && widget.loadInsights != null && !insightsError) {
         _lastProgressSignature = _signatureFromInsights(insights);
+        if (insights.statistics != null) {
+          _lastStatisticsSignature = _signatureFromStatistics(
+            insights.statistics!,
+          );
+        }
       }
     } finally {
       if (generation == _generation) {
@@ -866,12 +905,22 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     ),
     LayoutBuilder(
       builder: (context, c) {
+        final stats = _insights.statistics;
+        final useWorkoutTodayCard =
+            _insights.todayUsageMinutes == null && stats != null;
         final cards = [
-          _metric(
-            Icons.smartphone_rounded,
-            _minutes(_insights.todayUsageMinutes),
-            tr('Selected apps usage', 'Время в приложениях', 'Қолданба уақыты'),
-          ),
+          if (useWorkoutTodayCard)
+            _metric(
+              Icons.fitness_center_rounded,
+              '${stats.workouts.todayCompleted}',
+              tr('Workouts today', 'Тренировок сегодня', 'Бүгінгі жаттығулар'),
+            )
+          else
+            _metric(
+              Icons.smartphone_rounded,
+              _minutes(_insights.todayUsageMinutes),
+              tr('Selected apps usage', 'Время в приложениях', 'Қолданба уақыты'),
+            ),
           _metric(
             Icons.lock_open_rounded,
             _insights.todayUnlocks?.toString() ?? '—',
@@ -906,7 +955,12 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       action: tr('Progress ›', 'Прогресс ›', 'Ілгерілеу ›'),
       onTap: () => _go(DashboardTab.progress),
     ),
-    _usageCard(),
+    if (_insights.statistics != null)
+      _weeklyActivityCard(_insights.statistics!)
+    else if (_insights.statisticsError != null)
+      _statisticsErrorCard()
+    else
+      _usageCard(),
     _gap(),
     _section(
       tr('Recent activity', 'Недавняя активность', 'Соңғы белсенділік'),
@@ -2494,9 +2548,26 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       _gap(),
       _streakCard(),
     ],
-    _gap(),
-    _section(tr('Screen time', 'Экранное время', 'Экран уақыты')),
-    _usageCard(),
+    if (_insights.statistics != null) ...[
+      _gap(),
+      _progressStatsSummary(_insights.statistics!),
+      _gap(),
+      _section(
+        tr(
+          'Weekly workout activity',
+          'Тренировки за неделю',
+          'Апталық жаттығу белсенділігі',
+        ),
+      ),
+      _weeklyActivityCard(_insights.statistics!),
+    ] else if (_insights.statisticsError != null) ...[
+      _gap(),
+      _statisticsErrorCard(),
+    ] else ...[
+      _gap(),
+      _section(tr('Screen time', 'Экранное время', 'Экран уақыты')),
+      _usageCard(),
+    ],
     _gap(),
     _section(
       tr('Activity', 'Активность', 'Белсенділік'),
@@ -2658,6 +2729,97 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       ),
     ),
   ];
+  Widget _statisticsErrorCard() => _card(
+    _sub(
+      tr(
+        'Statistics could not be loaded.',
+        'Не удалось загрузить статистику.',
+        'Статистиканы жүктеу мүмкін болмады.',
+      ),
+    ),
+    key: const ValueKey('statistics_error'),
+  );
+
+  String _formatDurationShort(Duration d) {
+    final totalSeconds = d.inSeconds;
+    if (totalSeconds <= 0) return '0m';
+    final hours = d.inHours;
+    final mins = d.inMinutes.remainder(60);
+    if (hours > 0) return mins > 0 ? '${hours}h ${mins}m' : '${hours}h';
+    if (d.inMinutes > 0) return '${d.inMinutes}m';
+    return '${totalSeconds}s';
+  }
+
+  Widget _progressStatsSummary(StatisticsSnapshot stats) {
+    final avg = stats.accessDuration.averageAuthorizedDuration;
+    final avgLabel = avg != null ? _formatDurationShort(avg) : '—';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _metric(
+                Icons.check_circle_outline_rounded,
+                '${stats.workouts.allTimeCompleted}',
+                tr('Total workouts', 'Всего тренировок', 'Барлық жаттығулар'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _metric(
+                Icons.accessibility_new_rounded,
+                '${stats.workouts.totalVerifiedRepetitions}',
+                tr('Verified squats', 'Засчитано приседаний', 'Есептелген отырулар'),
+              ),
+            ),
+          ],
+        ),
+        _gap(8),
+        _card(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _sub(
+                '${tr('This week', 'На этой неделе', 'Осы аптада')}: ${stats.workouts.thisWeekCompleted} ${tr('workouts', 'трен.', 'жатт.')} · ${stats.unlocks.allTimeConfirmed} ${tr('total unlocks', 'всего разблок.', 'барлық ашу')}',
+                13,
+              ),
+              _gap(6),
+              _sub(
+                '${tr('Authorized access granted', 'Выданный доступ', 'Берілген рұқсат')}: ${_formatDurationShort(stats.accessDuration.totalAuthorizedDuration)} · ${tr('Avg', 'Средн.', 'Орт.')}: $avgLabel',
+                12,
+              ),
+              _gap(4),
+              _sub(
+                '${tr('Screen time saved', 'Сэкономлено времени', 'Үнемделген уақыт')}: ${tr('Unavailable', 'Недоступно', 'Қолжетімсіз')}',
+                11,
+              ),
+            ],
+          ),
+          key: const ValueKey('progress_stats_summary'),
+        ),
+      ],
+    );
+  }
+
+  Widget _weeklyActivityCard(StatisticsSnapshot stats) => _card(
+    Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sub(
+          tr(
+            'Weekly workout activity',
+            'Тренировки за неделю',
+            'Апталық жаттығу белсенділігі',
+          ),
+        ),
+        _gap(8),
+        _WorkoutActivityBars(days: stats.weeklyActivity, language: _language),
+      ],
+    ),
+    key: const ValueKey('weekly_workout_activity'),
+  );
+
   Widget _usageCard() => _card(
     Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2890,15 +3052,33 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
                 _gap(),
                 _section(tr('Last 7 days', 'Последние 7 дней', 'Соңғы 7 күн')),
                 _card(
-                  insights.week.isEmpty
-                      ? _sub(
-                          tr(
-                            'No screen time data yet.',
-                            'Данных пока нет.',
-                            'Деректер әзірге жоқ.',
-                          ),
+                  insights.statistics != null
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _sub(
+                              tr(
+                                'Weekly workout activity',
+                                'Тренировки за неделю',
+                                'Апталық жаттығу белсенділігі',
+                              ),
+                            ),
+                            _gap(8),
+                            _WorkoutActivityBars(
+                              days: insights.statistics!.weeklyActivity,
+                              language: _language,
+                            ),
+                          ],
                         )
-                      : _UsageBars(days: insights.week, language: _language),
+                      : insights.week.isEmpty
+                          ? _sub(
+                              tr(
+                                'No screen time data yet.',
+                                'Данных пока нет.',
+                                'Деректер әзірге жоқ.',
+                              ),
+                            )
+                          : _UsageBars(days: insights.week, language: _language),
                 ),
               ]);
             },
@@ -3003,6 +3183,73 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       ),
     ),
   );
+}
+
+class _WorkoutActivityBars extends StatelessWidget {
+  const _WorkoutActivityBars({required this.days, required this.language});
+  final List<DailyActivityStats> days;
+  final DashboardLanguage language;
+  @override
+  Widget build(BuildContext context) {
+    if (days.isEmpty) {
+      return Text(
+        switch (language) {
+          DashboardLanguage.en => 'No workout activity yet.',
+          DashboardLanguage.ru => 'Тренировок пока нет.',
+          DashboardLanguage.kk => 'Жаттығулар әзірге жоқ.',
+        },
+        style: const TextStyle(color: _muted, fontSize: 13),
+      );
+    }
+    final max = days.fold<int>(
+      1,
+      (m, d) => d.completedWorkouts > m ? d.completedWorkouts : m,
+    );
+    final labels = switch (language) {
+      DashboardLanguage.en => ['M', 'T', 'W', 'T', 'F', 'S', 'S'],
+      DashboardLanguage.ru => ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'],
+      DashboardLanguage.kk => ['Дс', 'Сс', 'Ср', 'Бс', 'Жм', 'Сб', 'Жс'],
+    };
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        for (final d in days)
+          Expanded(
+            child: Semantics(
+              label:
+                  '${MaterialLocalizations.of(context).formatShortDate(d.localDate)}: ${d.completedWorkouts}',
+              child: Column(
+                children: [
+                  Text(
+                    '${d.completedWorkouts}',
+                    style: const TextStyle(fontSize: 10, color: _muted),
+                  ),
+                  const SizedBox(height: 5),
+                  Container(
+                    height:
+                        82 *
+                            (d.completedWorkouts / max)
+                                .clamp(0.0, 1.0)
+                                .toDouble() +
+                        2,
+                    width: 20,
+                    decoration: BoxDecoration(
+                      color: d == days.last ? _lime : const Color(0xFF40552E),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    labels[d.localDate.weekday - 1],
+                    style: const TextStyle(fontSize: 10, color: _muted),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 class _UsageBars extends StatelessWidget {
