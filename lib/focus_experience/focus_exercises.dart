@@ -146,3 +146,15 @@ class FocusExercisePreferences {
   Future<bool> recordAssignment(FocusExerciseId id) =>
       preferences.setString(_lastAssignmentKey, id.name);
 }
+
+/// Returns true when [id] is available for Free Workout sessions.
+/// Push-ups are allowed in Free Workout even though [FocusExercise.ready] is
+/// false for the Focus unlock challenge rotation.
+bool isExerciseAvailableForFreeWorkout(FocusExerciseId id) {
+  return id == FocusExerciseId.squat || id == FocusExerciseId.pushUp;
+}
+
+/// Returns the [FocusExercise] with the given [id], or null if not found.
+FocusExercise? exerciseById(FocusExerciseId id) {
+  return focusExercises.where((e) => e.id == id).firstOrNull;
+}

@@ -4,7 +4,7 @@ abstract final class DatabaseConstants {
   static const String databaseFileName = 'levelup.db';
 
   /// Current schema version.
-  static const int currentSchemaVersion = 4;
+  static const int currentSchemaVersion = 5;
 
   // Table names
   static const String tableWorkoutSessions = 'workout_sessions';
@@ -56,7 +56,7 @@ abstract final class DatabaseConstants {
       $colRequestId TEXT,
       $colChallengeId TEXT NOT NULL,
       $colChallengeContext TEXT NOT NULL CHECK($colChallengeContext IN ('unlockChallenge', 'freeWorkout')),
-      $colExerciseType TEXT NOT NULL CHECK($colExerciseType IN ('squats')),
+      $colExerciseType TEXT NOT NULL CHECK($colExerciseType IN ('squats', 'pushUp')),
       $colTargetPackage TEXT,
       $colCompletedRepetitions INTEGER NOT NULL CHECK($colCompletedRepetitions >= 0),
       $colDurationSeconds INTEGER NOT NULL CHECK($colDurationSeconds >= 0),
@@ -68,6 +68,38 @@ abstract final class DatabaseConstants {
   static const String createIndexWorkoutSessionsCompletedAt = '''
     CREATE INDEX IF NOT EXISTS idx_workout_sessions_completed_at
     ON $tableWorkoutSessions ($colCompletedAt DESC);
+  ''';
+
+  // Migration DDL: v4 → v5 (extend exercise_type CHECK to include 'pushUp').
+  // SQLite does not support ALTER TABLE … MODIFY COLUMN, so we use the
+  // rename-create-copy-drop pattern.
+  static const String _tableWorkoutSessionsV5 = 'workout_sessions_v5';
+
+  static const String createTableWorkoutSessionsV5 = '''
+    CREATE TABLE IF NOT EXISTS $_tableWorkoutSessionsV5 (
+      $colSessionId TEXT PRIMARY KEY NOT NULL,
+      $colRequestId TEXT,
+      $colChallengeId TEXT NOT NULL,
+      $colChallengeContext TEXT NOT NULL CHECK($colChallengeContext IN ('unlockChallenge', 'freeWorkout')),
+      $colExerciseType TEXT NOT NULL CHECK($colExerciseType IN ('squats', 'pushUp')),
+      $colTargetPackage TEXT,
+      $colCompletedRepetitions INTEGER NOT NULL CHECK($colCompletedRepetitions >= 0),
+      $colDurationSeconds INTEGER NOT NULL CHECK($colDurationSeconds >= 0),
+      $colCompletedAt INTEGER NOT NULL,
+      $colVerificationSource TEXT
+    );
+  ''';
+
+  static const String migrateWorkoutSessionsV5CopyData = '''
+    INSERT INTO $_tableWorkoutSessionsV5 SELECT * FROM $tableWorkoutSessions;
+  ''';
+
+  static const String dropTableWorkoutSessions = '''
+    DROP TABLE $tableWorkoutSessions;
+  ''';
+
+  static const String renameWorkoutSessionsV5 = '''
+    ALTER TABLE $_tableWorkoutSessionsV5 RENAME TO $tableWorkoutSessions;
   ''';
 
   static const String createTableAccessAttempts = '''

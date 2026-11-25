@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../../../core/constants/channel_constants.dart';
+import '../../../models/exercise_type.dart';
 import '../../../services/native_bridge.dart';
 import '../../focus/application/focus_service.dart';
 import '../data/settings_repository.dart';
@@ -42,6 +43,9 @@ abstract class ISettingsService {
 
   /// Resets user preferences to factory defaults while preserving native gate target.
   Future<SettingsState> resetToDefaults();
+
+  /// Updates the preferred exercise type for Free Workout sessions.
+  Future<SettingsState> updatePreferredExercise(ExerciseType type);
 
   /// Disposes stream controllers and subscriptions.
   void dispose();
@@ -272,6 +276,13 @@ class SettingsService implements ISettingsService {
   @override
   void dispose() {
     _stateController.close();
+  }
+
+  @override
+  Future<SettingsState> updatePreferredExercise(ExerciseType type) async {
+    return updateSettings(
+      _currentState.settings.copyWith(preferredExerciseType: type),
+    );
   }
 
   void _emitState(SettingsState state) {

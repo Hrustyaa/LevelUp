@@ -40,7 +40,9 @@ abstract class ICoreIntegrationCoordinator {
   /// Launches a voluntary Free Workout session.
   ///
   /// Bypasses gate/target restrictions and guarantees no native access is ever granted.
-  Future<WorkoutSession> launchFreeWorkout();
+  Future<WorkoutSession> launchFreeWorkout({
+    ExerciseType exerciseType = ExerciseType.squats,
+  });
 
   /// Connects an [IPoseEventSource] to stream verified pose repetitions to the active session.
   void attachPoseEventSource(IPoseEventSource source);
@@ -226,7 +228,9 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
   }
 
   @override
-  Future<WorkoutSession> launchFreeWorkout() async {
+  Future<WorkoutSession> launchFreeWorkout({
+    ExerciseType exerciseType = ExerciseType.squats,
+  }) async {
     // 0. Ensure no workout session is already active or in-flight
     if (_currentState.sessionStatus == WorkoutSessionStatus.active ||
         _currentState.sessionStatus == WorkoutSessionStatus.preparing) {
@@ -243,14 +247,20 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
       _sessionManager.releaseCurrentSession();
     }
 
-    // 1. Create Free Workout request
-    final challengeRequest = _challengeService.createFreeWorkoutRequest();
+    // 1. Create Free Workout request for the selected exercise
+    final challengeRequest = _challengeService.createFreeWorkoutRequest(
+      exerciseType: exerciseType,
+    );
     final challengeDef = _challengeService.getChallengeDefinition(challengeRequest.challengeId);
 
     // 2. Create and start WorkoutSession without targetPackage
     _completionCompleter = null;
     final session = _sessionManager.createSession(challengeRequest);
     final startedSession = _sessionManager.startSession(session.sessionId);
+
+    final initialHint = exerciseType == ExerciseType.pushUp
+        ? 'Поставь телефон напротив и направь камеру на верхнюю часть тела'
+        : 'Встань так, чтобы камера видела ноги и корпус';
 
     _emitState(_currentState.copyWith(
       challenge: challengeDef,
@@ -263,7 +273,7 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
       accessGrantStatus: null,
       isWorkoutPersisted: false,
       accessAttemptState: null,
-      feedbackMessage: 'Встань так, чтобы камера видела ноги и корпус',
+      feedbackMessage: initialHint,
       clearError: true,
     ));
 
@@ -453,8 +463,14 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
     _completingSessionIds.add(sessionId);
 
     try {
-      // 1. Confirm session has completed and retrieve authoritative WorkoutResult
-      final workoutResult = session.toWorkoutResult();
+      // 1. Confirm session has completed and retrieve authoritative WorkoutResult.
+      // Experimental push-up sessions are tagged 'experimental_unverified' until
+      // physical-device accuracy validation is complete.
+      final workoutResult = session.toWorkoutResult(
+        source: session.exerciseType == ExerciseType.pushUp
+            ? 'experimental_unverified'
+            : 'camera',
+      );
 
       // 2. Persist completed workout result in SQLite
       await _workoutHistoryRepository.saveCompletedWorkout(workoutResult);

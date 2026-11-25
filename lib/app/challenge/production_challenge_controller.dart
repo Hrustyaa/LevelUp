@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'package:material_ui/material_ui.dart';
@@ -8,12 +9,19 @@ import 'package:material_ui/material_ui.dart';
 import '../../core/integration/coordinator_state.dart';
 import '../../core/integration/core_integration_coordinator.dart';
 import '../../core/integration/pose_event_adapter.dart';
+import '../../features/pose_detection/application/pose_landmark_smoother.dart';
+import '../../features/pose_detection/application/pose_temporal_guard.dart';
+import '../../features/pose_detection/application/pose_visibility_hysteresis.dart';
+import '../../features/pose_detection/application/push_up_counter.dart';
+import '../../features/pose_detection/application/squat_counter.dart';
 import '../../features/pose_detection/application/squat_geometry.dart';
+import '../../features/pose_detection/models/pose_overlay_state.dart';
 import '../../features/settings/application/camera_permission_checker.dart';
 import '../../features/settings/models/camera_permission_status.dart';
 import '../../focus_experience/focus_style.dart';
 import '../../models/access_grant_status.dart';
 import '../../models/challenge_type.dart';
+import '../../models/exercise_type.dart';
 import '../../models/workout_session_status.dart';
 import '../../services/native_bridge.dart';
 
@@ -45,8 +53,13 @@ class ProductionChallengeController extends ChangeNotifier {
   final ICameraPermissionChecker _cameraPermissionChecker;
   final INativeBridge _nativeBridge;
   final bool isUnlockChallenge;
+
+  /// Selected exercise for this session. Fixed at construction; push-ups are
+  /// available in Free Workout only. Unlock challenges always use squats.
+  final ExerciseType exerciseType;
   final String language;
   final PoseEngineAdapter _poseAdapter;
+  late final PushUpPoseAdapter _pushUpPoseAdapter;
   final Future<List<CameraDescription>> Function()? _availableCamerasOverride;
   final CameraControllerFactory? _cameraControllerFactory;
   final PoseProcessor? _poseProcessorOverride;
@@ -70,6 +83,16 @@ class ProductionChallengeController extends ChangeNotifier {
   bool _isUnlockConfirmed = false;
   bool _isFreeWorkoutCompleted = false;
   int _grantedMinutes = 5;
+  int _sessionEpoch = 0;
+  final PoseLandmarkSmoother _landmarkSmoother = PoseLandmarkSmoother();
+  final PoseTemporalGuard _temporalGuard = PoseTemporalGuard();
+  final PoseVisibilityHysteresis<String, LegLandmarks> _legHysteresis =
+      PoseVisibilityHysteresis<String, LegLandmarks>();
+  final PoseVisibilityHysteresis<String, ArmLandmarks> _armHysteresis =
+      PoseVisibilityHysteresis<String, ArmLandmarks>();
+  final PushUpCounter _pushUpCounter = PushUpCounter();
+  final ValueNotifier<PoseOverlayState> _poseOverlayNotifier =
+      ValueNotifier<PoseOverlayState>(PoseOverlayState.empty);
   String? _error;
   late String _hint = _tr(
     'Подготовка камеры…',
@@ -82,23 +105,31 @@ class ProductionChallengeController extends ChangeNotifier {
     required ICameraPermissionChecker cameraPermissionChecker,
     required INativeBridge nativeBridge,
     required this.isUnlockChallenge,
+    ExerciseType exerciseType = ExerciseType.squats,
     this.language = 'ru',
     PoseEngineAdapter? poseAdapter,
     Future<List<CameraDescription>> Function()? availableCamerasOverride,
     CameraControllerFactory? cameraControllerFactory,
     PoseProcessor? poseProcessorOverride,
     DateTime Function()? clock,
-  })  : _coordinator = coordinator,
+  })  : exerciseType =
+            isUnlockChallenge ? ExerciseType.squats : exerciseType,
+        _coordinator = coordinator,
         _cameraPermissionChecker = cameraPermissionChecker,
         _nativeBridge = nativeBridge,
         _poseAdapter = poseAdapter ?? PoseEngineAdapter(isSimulated: false),
         _availableCamerasOverride = availableCamerasOverride,
         _cameraControllerFactory = cameraControllerFactory,
         _poseProcessorOverride = poseProcessorOverride,
-        _clock = clock ?? DateTime.now;
+        _clock = clock ?? DateTime.now {
+    // Push-up adapter wraps _pushUpCounter for coordinator integration.
+    _pushUpPoseAdapter = PushUpPoseAdapter(counter: _pushUpCounter);
+  }
 
   // Exposed UI state
   CameraController? get cameraController => _cameraController;
+  ValueListenable<PoseOverlayState> get poseOverlayListenable =>
+      _poseOverlayNotifier;
   bool get cameraReady =>
       _cameraController != null && _cameraController!.value.isInitialized;
   bool get trackingReady => _trackingReady && !_isTerminal;
@@ -131,6 +162,9 @@ class ProductionChallengeController extends ChangeNotifier {
   Future<void> start() async {
     if (_disposed || _starting || _canceled) return;
     _starting = true;
+    _sessionEpoch++;
+    _landmarkSmoother.reset();
+    _clearPoseOverlay();
     _error = null;
     _notify();
 
@@ -156,14 +190,19 @@ class ProductionChallengeController extends ChangeNotifier {
         if (isUnlockChallenge) {
           await _coordinator.launchUnlockChallenge(requirePendingRequest: true);
         } else {
-          await _coordinator.launchFreeWorkout();
+          await _coordinator.launchFreeWorkout(exerciseType: exerciseType);
         }
       }
 
       if (_disposed || _canceled) return;
 
-      _poseAdapter.reset();
-      _coordinator.attachPoseEventSource(_poseAdapter);
+      if (exerciseType == ExerciseType.pushUp) {
+        _pushUpPoseAdapter.reset();
+        _coordinator.attachPoseEventSource(_pushUpPoseAdapter);
+      } else {
+        _poseAdapter.reset();
+        _coordinator.attachPoseEventSource(_poseAdapter);
+      }
 
       await _ensureCameraPermissionAndOpen();
     } catch (e) {
@@ -272,11 +311,17 @@ class ProductionChallengeController extends ChangeNotifier {
 
       if (!_disposed) {
         _error = null;
-        _hint = _tr(
-          'Встань боком так, чтобы в кадре были корпус и ноги.',
-          'Stand sideways with your body and legs in frame.',
-          'Денеңіз бен аяқтарыңыз кадрға сыятындай қырынан тұрыңыз.',
-        );
+        _hint = exerciseType == ExerciseType.pushUp
+            ? _tr(
+                'Поставь телефон напротив и направь камеру на верхнюю часть тела.',
+                'Place phone facing your upper body.',
+                'Телефонды алдыңызға қойып, камераны жоғарғы денеге бағыттаңыз.',
+              )
+            : _tr(
+                'Встань боком так, чтобы в кадре были корпус и ноги.',
+                'Stand sideways with your body and legs in frame.',
+                'Денеңіз бен аяқтарыңыз кадрға сыятындай қырынан тұрыңыз.',
+              );
         _notify();
       }
     } on CameraException catch (e) {
@@ -307,6 +352,8 @@ class ProductionChallengeController extends ChangeNotifier {
   }
 
   Future<void> _releaseCamera() async {
+    _sessionEpoch++;
+    _clearPoseOverlay();
     final current = _cameraController;
     _cameraController = null;
     _cameraDescription = null;
@@ -370,6 +417,7 @@ class ProductionChallengeController extends ChangeNotifier {
   @visibleForTesting
   Future<void> processInputImage(InputImage input) async {
     if (_disposed || !_foreground || _isTerminal) return;
+    final epoch = _sessionEpoch;
 
     try {
       final List<Pose> poses;
@@ -381,21 +429,89 @@ class ProductionChallengeController extends ChangeNotifier {
         poses = await detector.processImage(input);
       }
 
-      if (_disposed || !_foreground || _isTerminal) return;
+      if (_disposed || !_foreground || _isTerminal || epoch != _sessionEpoch) {
+        return;
+      }
 
       if (poses.isEmpty) {
         _trackingReady = false;
+        _clearPoseOverlay();
         _hint = _tr(
           'Человек не найден — отойди дальше от телефона',
           'Step back so your full body is visible',
           'Денеңіз толық көрінетіндей артқа шегініңіз',
         );
-        _poseAdapter.processAngle(null);
+        if (exerciseType == ExerciseType.pushUp) {
+          _pushUpPoseAdapter.processAngle(null);
+        } else {
+          _poseAdapter.processAngle(null);
+        }
         _notify();
         return;
       }
 
+      // --- Push-up path ---
+      if (exerciseType == ExerciseType.pushUp) {
+        final elbowAngle = PushUpGeometry.estimateElbowAngle(poses.first);
+        final imageSize = input.metadata?.size ?? Size.zero;
+        final rotation =
+            input.metadata?.rotation ?? InputImageRotation.rotation0deg;
+        final isFrontCamera =
+            (_cameraDescription?.lensDirection ?? CameraLensDirection.front) ==
+                CameraLensDirection.front;
+
+        if (elbowAngle == null) {
+          _trackingReady = false;
+          _hint = _tr(
+            'Не вижу плечи и локти — направь камеру на верхнюю часть тела',
+            'Show your shoulders and elbows — point camera at upper body',
+            'Иық пен шынтақты көрсет — камераны жоғарғы денеге бағытта',
+          );
+          _pushUpPoseAdapter.processAngle(null);
+          final overlay = _buildSmoothedArmOverlayState(
+            pose: poses.first,
+            imageSize: imageSize,
+            rotation: rotation,
+            isFrontCamera: isFrontCamera,
+            isValidForm: false,
+            sessionEpoch: epoch,
+          );
+          if (overlay == PoseOverlayState.empty) {
+            _clearPoseOverlay();
+          } else if (!_disposed) {
+            _poseOverlayNotifier.value = overlay;
+          }
+          _notify();
+          return;
+        }
+        final result = _pushUpPoseAdapter.processAngle(elbowAngle);
+        _trackingReady = true;
+        _hint = result.feedbackMessage;
+        final isValidForm = result.isValidTracking &&
+            (result.phase == SquatPhase.down || result.isRepetitionCompleted);
+        final overlay = _buildSmoothedArmOverlayState(
+          pose: poses.first,
+          imageSize: imageSize,
+          rotation: rotation,
+          isFrontCamera: isFrontCamera,
+          isValidForm: isValidForm,
+          sessionEpoch: epoch,
+        );
+        if (!_disposed) _poseOverlayNotifier.value = overlay;
+        _notify();
+        return;
+      }
+
+      // --- Squat path ---
+
       final angle = estimateKneeAngle(poses.first);
+      final imageSize = input.metadata?.size ?? Size.zero;
+      final rotation =
+          input.metadata?.rotation ?? InputImageRotation.rotation0deg;
+      final isFrontCamera =
+          (_cameraDescription?.lensDirection ?? CameraLensDirection.front) ==
+              CameraLensDirection.front;
+
       if (angle == null) {
         _trackingReady = false;
         _hint = _tr(
@@ -404,6 +520,19 @@ class ProductionChallengeController extends ChangeNotifier {
           'Жамбас, тізе және табан көрінетіндей қырынан тұрыңыз',
         );
         _poseAdapter.processAngle(null);
+        final overlay = _buildSmoothedOverlayState(
+          pose: poses.first,
+          imageSize: imageSize,
+          rotation: rotation,
+          isFrontCamera: isFrontCamera,
+          isValidForm: false,
+          sessionEpoch: epoch,
+        );
+        if (overlay == PoseOverlayState.empty) {
+          _clearPoseOverlay();
+        } else if (!_disposed) {
+          _poseOverlayNotifier.value = overlay;
+        }
         _notify();
         return;
       }
@@ -411,10 +540,312 @@ class ProductionChallengeController extends ChangeNotifier {
       final result = _poseAdapter.processAngle(angle);
       _trackingReady = true;
       _hint = result.feedbackMessage;
+      final isValidForm = result.isValidTracking &&
+          (result.phase == SquatPhase.down || result.isRepetitionCompleted);
+      final overlay = _buildSmoothedOverlayState(
+        pose: poses.first,
+        imageSize: imageSize,
+        rotation: rotation,
+        isFrontCamera: isFrontCamera,
+        isValidForm: isValidForm,
+        sessionEpoch: epoch,
+      );
+      if (!_disposed) {
+        _poseOverlayNotifier.value = overlay;
+      }
       _notify();
     } catch (_) {
       // Ignore transient single-frame ML Kit errors
     }
+  }
+
+  void _clearPoseOverlay() {
+    _landmarkSmoother.reset();
+    _temporalGuard.reset();
+    _legHysteresis.reset();
+    _armHysteresis.reset();
+    if (!_disposed && _poseOverlayNotifier.value != PoseOverlayState.empty) {
+      _poseOverlayNotifier.value = PoseOverlayState.empty;
+    }
+  }
+
+  /// Extracts reliable left/right leg landmarks (`hip -> knee -> ankle`) from
+  /// an ML Kit [Pose] for read-only overlay rendering.
+  @visibleForTesting
+  static PoseOverlayState extractOverlayState({
+    required Pose pose,
+    required Size imageSize,
+    required InputImageRotation rotation,
+    required bool isFrontCamera,
+    required bool isValidForm,
+    int sessionEpoch = 0,
+  }) {
+    final map = pose.landmarks;
+
+    LegLandmarks? extractLeg(
+      PoseLandmarkType hipType,
+      PoseLandmarkType kneeType,
+      PoseLandmarkType ankleType,
+    ) {
+      final hip = map[hipType];
+      final knee = map[kneeType];
+      final ankle = map[ankleType];
+      if (hip == null || knee == null || ankle == null) return null;
+      final leg = LegLandmarks(
+        hip: PoseJointPoint(
+          imagePoint: Offset(hip.x, hip.y),
+          likelihood: hip.likelihood,
+        ),
+        knee: PoseJointPoint(
+          imagePoint: Offset(knee.x, knee.y),
+          likelihood: knee.likelihood,
+        ),
+        ankle: PoseJointPoint(
+          imagePoint: Offset(ankle.x, ankle.y),
+          likelihood: ankle.likelihood,
+        ),
+      );
+      return leg.isReliable(SquatGeometry.defaultLikelihoodThreshold)
+          ? leg
+          : null;
+    }
+
+    return PoseOverlayState(
+      leftLeg: extractLeg(
+        PoseLandmarkType.leftHip,
+        PoseLandmarkType.leftKnee,
+        PoseLandmarkType.leftAnkle,
+      ),
+      rightLeg: extractLeg(
+        PoseLandmarkType.rightHip,
+        PoseLandmarkType.rightKnee,
+        PoseLandmarkType.rightAnkle,
+      ),
+      imageSize: imageSize,
+      rotation: rotation,
+      isFrontCamera: isFrontCamera,
+      isValidForm: isValidForm,
+      sessionEpoch: sessionEpoch,
+    );
+  }
+
+  /// Applies temporal outlier rejection and One Euro smoothing for visual
+  /// overlay rendering only. Raw landmarks for rep counting are never touched.
+  Offset _smoothJoint(
+    PoseLandmarkType type,
+    Offset raw,
+    Size imageSize,
+    DateTime now,
+  ) {
+    final Offset target;
+    if (_temporalGuard.isPlausible(type, raw, imageSize)) {
+      _temporalGuard.update(type, raw);
+      target = raw;
+    } else {
+      target = _temporalGuard.lastPosition(type) ?? raw;
+    }
+    return _landmarkSmoother.smooth(type, target, timestamp: now);
+  }
+
+  /// Builds a [PoseOverlayState] identical to [extractOverlayState] but with
+  /// each landmark coordinate passed through [PoseTemporalGuard] and
+  /// [PoseLandmarkSmoother] first.
+  ///
+  /// **Important:** raw landmark coordinates are still forwarded unchanged to
+  /// [estimateKneeAngle] → [SquatCounter]. Smoothing is cosmetic only.
+  PoseOverlayState _buildSmoothedOverlayState({
+    required Pose pose,
+    required Size imageSize,
+    required InputImageRotation rotation,
+    required bool isFrontCamera,
+    required bool isValidForm,
+    required int sessionEpoch,
+  }) {
+    final map = pose.landmarks;
+
+    final now = _clock();
+    LegLandmarks? extractLegCandidate(
+      PoseLandmarkType hipType,
+      PoseLandmarkType kneeType,
+      PoseLandmarkType ankleType,
+    ) {
+      final hip = map[hipType];
+      final knee = map[kneeType];
+      final ankle = map[ankleType];
+      if (hip == null || knee == null || ankle == null) return null;
+      final rawLeg = LegLandmarks(
+        hip: PoseJointPoint(
+          imagePoint: Offset(hip.x, hip.y),
+          likelihood: hip.likelihood,
+        ),
+        knee: PoseJointPoint(
+          imagePoint: Offset(knee.x, knee.y),
+          likelihood: knee.likelihood,
+        ),
+        ankle: PoseJointPoint(
+          imagePoint: Offset(ankle.x, ankle.y),
+          likelihood: ankle.likelihood,
+        ),
+      );
+      if (!rawLeg.isReliable(_legHysteresis.exitThreshold)) return null;
+
+      return LegLandmarks(
+        hip: PoseJointPoint(
+          imagePoint: _smoothJoint(
+              hipType, rawLeg.hip.imagePoint, imageSize, now),
+          likelihood: hip.likelihood,
+        ),
+        knee: PoseJointPoint(
+          imagePoint: _smoothJoint(
+              kneeType, rawLeg.knee.imagePoint, imageSize, now),
+          likelihood: knee.likelihood,
+        ),
+        ankle: PoseJointPoint(
+          imagePoint: _smoothJoint(
+              ankleType, rawLeg.ankle.imagePoint, imageSize, now),
+          likelihood: ankle.likelihood,
+        ),
+      );
+    }
+
+    final leftCandidate = extractLegCandidate(
+      PoseLandmarkType.leftHip,
+      PoseLandmarkType.leftKnee,
+      PoseLandmarkType.leftAnkle,
+    );
+    final rightCandidate = extractLegCandidate(
+      PoseLandmarkType.rightHip,
+      PoseLandmarkType.rightKnee,
+      PoseLandmarkType.rightAnkle,
+    );
+
+    final leftRes = _legHysteresis.update(
+      key: 'left',
+      candidate: leftCandidate,
+      minLikelihood: leftCandidate?.minLikelihood ?? 0.0,
+      now: now,
+    );
+    final rightRes = _legHysteresis.update(
+      key: 'right',
+      candidate: rightCandidate,
+      minLikelihood: rightCandidate?.minLikelihood ?? 0.0,
+      now: now,
+    );
+
+    if (!leftRes.isVisible && !rightRes.isVisible) {
+      return PoseOverlayState.empty;
+    }
+
+    final hasConfident = leftRes.isConfident || rightRes.isConfident;
+    return PoseOverlayState(
+      leftLeg: leftRes.value,
+      rightLeg: rightRes.value,
+      imageSize: imageSize,
+      rotation: rotation,
+      isFrontCamera: isFrontCamera,
+      isValidForm: isValidForm && hasConfident,
+      sessionEpoch: sessionEpoch,
+      opacity: hasConfident ? 1.0 : 0.45,
+    );
+  }
+
+  /// Builds a [PoseOverlayState] for push-up mode: smooths shoulder/elbow/wrist
+  /// landmarks and returns an overlay with [ExerciseMode.pushUp].
+  PoseOverlayState _buildSmoothedArmOverlayState({
+    required Pose pose,
+    required Size imageSize,
+    required InputImageRotation rotation,
+    required bool isFrontCamera,
+    required bool isValidForm,
+    required int sessionEpoch,
+  }) {
+    final map = pose.landmarks;
+    final now = _clock();
+
+    ArmLandmarks? extractArmCandidate(
+      PoseLandmarkType shoulderType,
+      PoseLandmarkType elbowType,
+      PoseLandmarkType wristType,
+    ) {
+      final shoulder = map[shoulderType];
+      final elbow = map[elbowType];
+      final wrist = map[wristType];
+      if (shoulder == null || elbow == null || wrist == null) return null;
+      final rawArm = ArmLandmarks(
+        shoulder: PoseJointPoint(
+          imagePoint: Offset(shoulder.x, shoulder.y),
+          likelihood: shoulder.likelihood,
+        ),
+        elbow: PoseJointPoint(
+          imagePoint: Offset(elbow.x, elbow.y),
+          likelihood: elbow.likelihood,
+        ),
+        wrist: PoseJointPoint(
+          imagePoint: Offset(wrist.x, wrist.y),
+          likelihood: wrist.likelihood,
+        ),
+      );
+      if (!rawArm.isReliable(_armHysteresis.exitThreshold)) return null;
+
+      return ArmLandmarks(
+        shoulder: PoseJointPoint(
+          imagePoint: _smoothJoint(
+              shoulderType, rawArm.shoulder.imagePoint, imageSize, now),
+          likelihood: shoulder.likelihood,
+        ),
+        elbow: PoseJointPoint(
+          imagePoint: _smoothJoint(
+              elbowType, rawArm.elbow.imagePoint, imageSize, now),
+          likelihood: elbow.likelihood,
+        ),
+        wrist: PoseJointPoint(
+          imagePoint: _smoothJoint(
+              wristType, rawArm.wrist.imagePoint, imageSize, now),
+          likelihood: wrist.likelihood,
+        ),
+      );
+    }
+
+    final leftCandidate = extractArmCandidate(
+      PoseLandmarkType.leftShoulder,
+      PoseLandmarkType.leftElbow,
+      PoseLandmarkType.leftWrist,
+    );
+    final rightCandidate = extractArmCandidate(
+      PoseLandmarkType.rightShoulder,
+      PoseLandmarkType.rightElbow,
+      PoseLandmarkType.rightWrist,
+    );
+
+    final leftRes = _armHysteresis.update(
+      key: 'left',
+      candidate: leftCandidate,
+      minLikelihood: leftCandidate?.minLikelihood ?? 0.0,
+      now: now,
+    );
+    final rightRes = _armHysteresis.update(
+      key: 'right',
+      candidate: rightCandidate,
+      minLikelihood: rightCandidate?.minLikelihood ?? 0.0,
+      now: now,
+    );
+
+    if (!leftRes.isVisible && !rightRes.isVisible) {
+      return PoseOverlayState.empty;
+    }
+
+    final hasConfident = leftRes.isConfident || rightRes.isConfident;
+    return PoseOverlayState(
+      leftArm: leftRes.value,
+      rightArm: rightRes.value,
+      imageSize: imageSize,
+      rotation: rotation,
+      isFrontCamera: isFrontCamera,
+      isValidForm: isValidForm && hasConfident,
+      sessionEpoch: sessionEpoch,
+      exerciseMode: ExerciseMode.pushUp,
+      opacity: hasConfident ? 1.0 : 0.45,
+    );
   }
 
   /// Extracts the 2D interior knee angle using [SquatGeometry].
@@ -540,7 +971,11 @@ class ProductionChallengeController extends ChangeNotifier {
     if (_disposed) return;
     if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
       _foreground = false;
-      _poseAdapter.processAngle(null);
+      if (exerciseType == ExerciseType.pushUp) {
+        _pushUpPoseAdapter.processAngle(null);
+      } else {
+        _poseAdapter.processAngle(null);
+      }
       await _releaseCamera();
       _notify();
     } else if (state == AppLifecycleState.resumed) {
@@ -601,6 +1036,7 @@ class ProductionChallengeController extends ChangeNotifier {
   @override
   void dispose() {
     if (_disposed) return;
+    _clearPoseOverlay();
     _disposed = true;
 
     _coordinatorSub?.cancel();
@@ -625,6 +1061,8 @@ class ProductionChallengeController extends ChangeNotifier {
     }
 
     _poseAdapter.dispose();
+    _pushUpPoseAdapter.dispose();
+    _poseOverlayNotifier.dispose();
     unawaited(_poseDetector?.close());
     _poseDetector = null;
     unawaited(_releaseCamera());

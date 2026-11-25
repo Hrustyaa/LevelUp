@@ -213,14 +213,22 @@ class WorkoutHistoryRepository implements IWorkoutHistoryRepository {
     final challengeId = row[DatabaseConstants.colChallengeId] as String;
     final definition = ChallengeCatalog.byId[challengeId];
 
+    final rawExerciseType = row[DatabaseConstants.colExerciseType] as String;
+    final ExerciseType parsedExerciseType;
+    try {
+      parsedExerciseType = ExerciseType.values.byName(rawExerciseType);
+    } on ArgumentError {
+      throw InvalidWorkoutDataException(
+        'Unknown historical exercise_type "$rawExerciseType" in session "${row[DatabaseConstants.colSessionId]}".',
+      );
+    }
+
     return WorkoutResult(
       sessionId: row[DatabaseConstants.colSessionId] as String,
       requestId: (row[DatabaseConstants.colRequestId] as String?) ?? '',
       challengeId: challengeId,
       challengeContext: context,
-      exerciseType: ExerciseType.values.byName(
-        row[DatabaseConstants.colExerciseType] as String,
-      ),
+      exerciseType: parsedExerciseType,
       targetPackage: row[DatabaseConstants.colTargetPackage] as String?,
       completedRepetitions:
           row[DatabaseConstants.colCompletedRepetitions] as int,

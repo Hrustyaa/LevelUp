@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../../core/constants/channel_constants.dart';
 import '../../../core/errors/settings_exceptions.dart';
+import '../../../models/exercise_type.dart';
 
 /// Immutable application-level settings and user preferences for LevelUp.
 @immutable
@@ -37,12 +38,20 @@ class AppSettings {
   /// Actively consumed by Developer Lab diagnostics.
   final bool diagnosticLoggingEnabled;
 
+  /// Preferred exercise type for Free Workout mode.
+  ///
+  /// Stored user preference; always valid (no validation required).
+  /// Defaults to [ExerciseType.squats]. Push-ups are not available as an
+  /// unlock challenge method and are gated at the UI/controller layer.
+  final ExerciseType preferredExerciseType;
+
   const AppSettings({
     required this.defaultTargetPackage,
     this.defaultUnlockDurationSeconds = fixedUnlockDurationSeconds,
     required this.emergencyPauseAllowed,
     required this.soundFeedbackEnabled,
     required this.diagnosticLoggingEnabled,
+    this.preferredExerciseType = ExerciseType.squats,
   });
 
   /// Factory creating deterministic standard defaults.
@@ -53,6 +62,7 @@ class AppSettings {
       emergencyPauseAllowed: true,
       soundFeedbackEnabled: true,
       diagnosticLoggingEnabled: true,
+      preferredExerciseType: ExerciseType.squats,
     );
   }
 
@@ -94,6 +104,7 @@ class AppSettings {
     bool? emergencyPauseAllowed,
     bool? soundFeedbackEnabled,
     bool? diagnosticLoggingEnabled,
+    ExerciseType? preferredExerciseType,
   }) {
     return AppSettings(
       defaultTargetPackage: defaultTargetPackage ?? this.defaultTargetPackage,
@@ -103,6 +114,7 @@ class AppSettings {
       soundFeedbackEnabled: soundFeedbackEnabled ?? this.soundFeedbackEnabled,
       diagnosticLoggingEnabled:
           diagnosticLoggingEnabled ?? this.diagnosticLoggingEnabled,
+      preferredExerciseType: preferredExerciseType ?? this.preferredExerciseType,
     );
   }
 
@@ -116,12 +128,24 @@ class AppSettings {
     // Invariant: Duration is fixed at 300 seconds for MVP
     const duration = fixedUnlockDurationSeconds;
 
+    // Parse preferred exercise type; fall back to squats for unrecognised/missing values.
+    final rawExercise = json['preferred_exercise_type'] as String?;
+    ExerciseType preferredExercise;
+    try {
+      preferredExercise = rawExercise != null
+          ? ExerciseType.values.byName(rawExercise)
+          : ExerciseType.squats;
+    } catch (_) {
+      preferredExercise = ExerciseType.squats;
+    }
+
     return AppSettings(
       defaultTargetPackage: target,
       defaultUnlockDurationSeconds: duration,
       emergencyPauseAllowed: json['emergency_pause_allowed'] as bool? ?? true,
       soundFeedbackEnabled: json['sound_feedback_enabled'] as bool? ?? true,
       diagnosticLoggingEnabled: json['diagnostic_logging_enabled'] as bool? ?? true,
+      preferredExerciseType: preferredExercise,
     );
   }
 
@@ -133,6 +157,7 @@ class AppSettings {
       'emergency_pause_allowed': emergencyPauseAllowed,
       'sound_feedback_enabled': soundFeedbackEnabled,
       'diagnostic_logging_enabled': diagnosticLoggingEnabled,
+      'preferred_exercise_type': preferredExerciseType.name,
     };
   }
 
@@ -145,7 +170,8 @@ class AppSettings {
           defaultUnlockDurationSeconds == other.defaultUnlockDurationSeconds &&
           emergencyPauseAllowed == other.emergencyPauseAllowed &&
           soundFeedbackEnabled == other.soundFeedbackEnabled &&
-          diagnosticLoggingEnabled == other.diagnosticLoggingEnabled;
+          diagnosticLoggingEnabled == other.diagnosticLoggingEnabled &&
+          preferredExerciseType == other.preferredExerciseType;
 
   @override
   int get hashCode => Object.hash(
@@ -154,10 +180,12 @@ class AppSettings {
         emergencyPauseAllowed,
         soundFeedbackEnabled,
         diagnosticLoggingEnabled,
+        preferredExerciseType,
       );
 
   @override
   String toString() =>
       'AppSettings(target: $defaultTargetPackage, duration: ${defaultUnlockDurationSeconds}s, '
-      'emergencyPause: $emergencyPauseAllowed, sound: $soundFeedbackEnabled, diagLogs: $diagnosticLoggingEnabled)';
+      'emergencyPause: $emergencyPauseAllowed, sound: $soundFeedbackEnabled, diagLogs: $diagnosticLoggingEnabled, '
+      'preferredExercise: ${preferredExerciseType.name})';
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../../features/pose_detection/application/push_up_counter.dart';
 import '../../features/pose_detection/application/squat_counter.dart';
 
 /// Contract for a source emitting verified pose tracking and repetition events.
@@ -46,6 +47,49 @@ class PoseEngineAdapter implements IPoseEventSource {
   }
 
   /// Resets the internal counter state machine back to zero.
+  void reset() {
+    _counter.reset();
+  }
+
+  @override
+  void dispose() {
+    _controller.close();
+  }
+}
+
+/// Adapter that processes elbow angles through a [PushUpCounter] and exposes
+/// the results as an [IPoseEventSource].
+///
+/// Used when the active exercise is [ExerciseType.pushUp]. The coordinator
+/// consumes [SquatCounterResult] in both cases because the state machine
+/// structure is identical (top/bottom phases, repetition count, feedback).
+class PushUpPoseAdapter implements IPoseEventSource {
+  final PushUpCounter _counter;
+  final StreamController<SquatCounterResult> _controller =
+      StreamController<SquatCounterResult>.broadcast();
+
+  @override
+  final bool isSimulated;
+
+  PushUpPoseAdapter({
+    PushUpCounter? counter,
+    this.isSimulated = false,
+  }) : _counter = counter ?? PushUpCounter();
+
+  @override
+  Stream<SquatCounterResult> get poseStream => _controller.stream;
+
+  /// Processes a single elbow angle measurement and emits the evaluated result.
+  SquatCounterResult processAngle(double? angle, {bool? isSimulated}) {
+    final simulatedFlag = isSimulated ?? this.isSimulated;
+    final result = _counter.processAngle(angle, isSimulated: simulatedFlag);
+    if (!_controller.isClosed) {
+      _controller.add(result);
+    }
+    return result;
+  }
+
+  /// Resets the internal push-up counter state machine.
   void reset() {
     _counter.reset();
   }

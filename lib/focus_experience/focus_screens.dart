@@ -17,6 +17,7 @@ class FocusChallengeScreen extends StatelessWidget {
     this.hint,
     this.error,
     this.onRetry,
+    this.headerExtra,
   });
 
   final FocusExercise exercise;
@@ -26,6 +27,9 @@ class FocusChallengeScreen extends StatelessWidget {
   final VoidCallback? onCancel, onRetry;
   final String language;
   final String? hint, error;
+
+  /// Optional widget inserted below the progress bar (e.g. exercise selector).
+  final Widget? headerExtra;
 
   @override
   Widget build(BuildContext context) {
@@ -91,6 +95,7 @@ class FocusChallengeScreen extends StatelessWidget {
                   borderRadius: BorderRadius.circular(4),
                 ),
                 const SizedBox(height: 16),
+                ?headerExtra,
                 if (cameraPreview != null)
                   ClipRRect(
                     borderRadius: BorderRadius.circular(16),

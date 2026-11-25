@@ -81,7 +81,7 @@ class WorkoutSession {
   /// Converts a successfully completed session into a structured [WorkoutResult].
   ///
   /// Throws [StateError] if session is not in [WorkoutSessionStatus.completed] status.
-  WorkoutResult toWorkoutResult({String source = 'camera'}) {
+  WorkoutResult toWorkoutResult({String? source}) {
     if (status != WorkoutSessionStatus.completed) {
       throw StateError(
         'Cannot convert session "$sessionId" to WorkoutResult: status is $status (expected completed).',
@@ -89,6 +89,10 @@ class WorkoutSession {
     }
 
     final isUnlock = challengeContext == ChallengeType.unlockChallenge;
+    final resolvedSource = source ??
+        (exerciseType == ExerciseType.pushUp
+            ? 'experimental_unverified'
+            : 'camera');
 
     return WorkoutResult(
       sessionId: sessionId,
@@ -103,7 +107,7 @@ class WorkoutSession {
       eligibleForAccess: isUnlock,
       accessDurationSeconds: isUnlock ? accessDurationSeconds : 0,
       earnedXp: xpReward,
-      source: source,
+      source: resolvedSource,
     );
   }
 

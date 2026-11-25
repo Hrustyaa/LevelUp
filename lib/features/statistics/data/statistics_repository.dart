@@ -33,7 +33,7 @@ class SqliteStatisticsRepository implements IStatisticsRepository {
 
   static const String _trustedWorkoutFilter =
       "(${DatabaseConstants.colVerificationSource} IS NULL OR "
-      "${DatabaseConstants.colVerificationSource} NOT IN ('simulated', 'preview', 'ui_only', 'mock'))";
+      "${DatabaseConstants.colVerificationSource} NOT IN ('simulated', 'preview', 'ui_only', 'mock', 'experimental_unverified'))";
 
   @override
   Future<WorkoutStatistics> loadWorkoutStatistics({

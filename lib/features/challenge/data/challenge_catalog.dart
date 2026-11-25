@@ -12,6 +12,9 @@ abstract final class ChallengeCatalog {
   /// Challenge ID for the standard 5-squat voluntary free workout.
   static const String squatFreeWorkoutId = 'squats_free_5';
 
+  /// Challenge ID for the standard 5-push-up voluntary free workout.
+  static const String pushUpFreeWorkoutId = 'pushup_free_5';
+
   /// Default 5-squat unlock challenge granting 5 calendar minutes of access.
   static const ChallengeDefinition squatUnlockChallenge = ChallengeDefinition(
     challengeId: squatUnlockId,
@@ -36,10 +39,23 @@ abstract final class ChallengeCatalog {
     optionalXpReward: 50,
   );
 
+  /// Default 5-push-up free workout without an app-unlock grant.
+  static const ChallengeDefinition pushUpFreeWorkout = ChallengeDefinition(
+    challengeId: pushUpFreeWorkoutId,
+    exerciseType: ExerciseType.pushUp,
+    title: '5 Push-ups Quick Set',
+    description:
+        'Complete 5 front-facing push-ups for daily exercise and habit progression.',
+    targetRepetitions: 5,
+    accessDurationSeconds: 0,
+    optionalXpReward: 50,
+  );
+
   /// All supported challenge definitions for the competition MVP.
   static const List<ChallengeDefinition> all = [
     squatUnlockChallenge,
     squatFreeWorkout,
+    pushUpFreeWorkout,
   ];
 
   /// Fast lookup map by challengeId.

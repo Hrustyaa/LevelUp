@@ -127,6 +127,16 @@ class LevelUpDatabase {
         await db.execute(DatabaseConstants.createTableAchievements);
         await db.execute(DatabaseConstants.createIndexAchievementsUnlockedAt);
       }
+      if (oldVersion < 5) {
+        // SQLite does not support modifying CHECK constraints with ALTER TABLE.
+        // Strategy: create v5 table with extended constraint, copy data, drop
+        // old table, rename v5 → workout_sessions, recreate index.
+        await db.execute(DatabaseConstants.createTableWorkoutSessionsV5);
+        await db.execute(DatabaseConstants.migrateWorkoutSessionsV5CopyData);
+        await db.execute(DatabaseConstants.dropTableWorkoutSessions);
+        await db.execute(DatabaseConstants.renameWorkoutSessionsV5);
+        await db.execute(DatabaseConstants.createIndexWorkoutSessionsCompletedAt);
+      }
     } catch (e) {
       throw DatabaseMigrationException(
         fromVersion: oldVersion,

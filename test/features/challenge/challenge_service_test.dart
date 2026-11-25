@@ -36,7 +36,7 @@ void main() {
       final available1 = service.getAvailableChallenges();
       final available2 = service.getAvailableChallenges();
 
-      expect(available1.length, equals(2));
+      expect(available1.length, equals(3));
       expect(available1, equals(available2));
 
       // Attempting to modify the list should throw UnsupportedError

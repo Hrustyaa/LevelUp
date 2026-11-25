@@ -1,4 +1,5 @@
 import '../../../models/challenge_type.dart';
+import '../../../models/exercise_type.dart';
 import '../../../models/workout_result.dart';
 
 /// Result of evaluating a [WorkoutResult] against [XpRewardPolicy].
@@ -53,6 +54,15 @@ class XpRewardPolicy {
         xpAmount: 0,
         rejectionReason:
             'Incomplete workout: ${result.completedRepetitions} < $minimumRepetitions reps',
+      );
+    }
+
+    if (result.exerciseType != ExerciseType.squats) {
+      return XpRewardDecision(
+        eligible: false,
+        xpAmount: 0,
+        rejectionReason:
+            'Unvalidated exercise type: "${result.exerciseType.name}"',
       );
     }
 

@@ -355,7 +355,7 @@ void main() {
         customPath: dbPath,
       );
       final v4Db = await v4Manager.database;
-      expect(await v4Db.getVersion(), equals(4));
+      expect(await v4Db.getVersion(), equals(5));
 
       expect(
         (await v4Db.query(DatabaseConstants.tableWorkoutSessions)).length,
@@ -377,6 +377,127 @@ void main() {
       expect(achievements, isEmpty);
 
       await v4Manager.close();
+    });
+
+    test('23. v4 to v5 migration preserves all records and enables pushUp while rejecting unknown types', () async {
+      final dbPath = p.join(tempDir.path, 'v4_to_v5_test.db');
+
+      final v4Db = await databaseFactoryFfi.openDatabase(
+        dbPath,
+        options: OpenDatabaseOptions(
+          version: 4,
+          onCreate: (db, _) async {
+            // Original v4 workout_sessions had CHECK(exercise_type = 'squats')
+            await db.execute('''
+              CREATE TABLE ${DatabaseConstants.tableWorkoutSessions} (
+                ${DatabaseConstants.colSessionId} TEXT PRIMARY KEY NOT NULL,
+                ${DatabaseConstants.colRequestId} TEXT,
+                ${DatabaseConstants.colChallengeId} TEXT NOT NULL,
+                ${DatabaseConstants.colChallengeContext} TEXT NOT NULL CHECK(${DatabaseConstants.colChallengeContext} IN ('unlockChallenge', 'freeWorkout')),
+                ${DatabaseConstants.colExerciseType} TEXT NOT NULL CHECK(${DatabaseConstants.colExerciseType} = 'squats'),
+                ${DatabaseConstants.colTargetPackage} TEXT,
+                ${DatabaseConstants.colCompletedRepetitions} INTEGER NOT NULL CHECK(${DatabaseConstants.colCompletedRepetitions} >= 0),
+                ${DatabaseConstants.colDurationSeconds} INTEGER NOT NULL CHECK(${DatabaseConstants.colDurationSeconds} >= 0),
+                ${DatabaseConstants.colCompletedAt} INTEGER NOT NULL,
+                ${DatabaseConstants.colVerificationSource} TEXT
+              );
+            ''');
+            await db.execute(DatabaseConstants.createIndexWorkoutSessionsCompletedAt);
+            await db.execute(DatabaseConstants.createTableAccessAttempts);
+            await db.execute(DatabaseConstants.createTableAppSettings);
+            await db.execute(DatabaseConstants.createTableXpRewards);
+            await db.execute(DatabaseConstants.createTableAchievements);
+          },
+        ),
+      );
+
+      await v4Db.insert(DatabaseConstants.tableWorkoutSessions, {
+        DatabaseConstants.colSessionId: 's_v4_1',
+        DatabaseConstants.colRequestId: 'req_v4_1',
+        DatabaseConstants.colChallengeId: 'squats_unlock_5',
+        DatabaseConstants.colChallengeContext: 'unlockChallenge',
+        DatabaseConstants.colExerciseType: 'squats',
+        DatabaseConstants.colTargetPackage: 'com.instagram.android',
+        DatabaseConstants.colCompletedRepetitions: 5,
+        DatabaseConstants.colDurationSeconds: 20,
+        DatabaseConstants.colCompletedAt: 1700000000000,
+        DatabaseConstants.colVerificationSource: 'camera',
+      });
+      await v4Db.insert(DatabaseConstants.tableAccessAttempts, {
+        DatabaseConstants.colSessionId: 's_v4_1',
+        DatabaseConstants.colTargetPackage: 'com.instagram.android',
+        DatabaseConstants.colDurationSeconds: 300,
+        DatabaseConstants.colState: 'confirmed',
+        DatabaseConstants.colAttemptedAt: 1700000000000,
+        DatabaseConstants.colConfirmedAt: 1700000001000,
+        DatabaseConstants.colUnlockUntil: 1700000301000,
+      });
+      await v4Db.insert(DatabaseConstants.tableAppSettings, {
+        DatabaseConstants.colSettingsKey: 'app_settings',
+        DatabaseConstants.colSettingsValue: '{"preferred_exercise_type":"squats"}',
+        DatabaseConstants.colSettingsUpdatedAt: 1700000000000,
+      });
+      await v4Db.insert(DatabaseConstants.tableXpRewards, {
+        DatabaseConstants.colSessionId: 's_v4_1',
+        DatabaseConstants.colChallengeId: 'squats_unlock_5',
+        DatabaseConstants.colChallengeContext: 'unlockChallenge',
+        DatabaseConstants.colXpAmount: 50,
+        DatabaseConstants.colAwardedAt: 1700000000000,
+        DatabaseConstants.colLocalDate: '2023-11-14',
+        DatabaseConstants.colVerificationSource: 'camera',
+      });
+      await v4Db.insert(DatabaseConstants.tableAchievements, {
+        DatabaseConstants.colAchievementId: 'first_workout',
+        DatabaseConstants.colUnlockedAt: 1700000000000,
+        DatabaseConstants.colCategory: 'workouts',
+        DatabaseConstants.colTargetValue: 1,
+        DatabaseConstants.colObservedValue: 1,
+      });
+      await v4Db.close();
+
+      final v5Manager = LevelUpDatabase(
+        databaseFactory: databaseFactoryFfi,
+        customPath: dbPath,
+      );
+      final v5Db = await v5Manager.database;
+      expect(await v5Db.getVersion(), equals(5));
+
+      expect((await v5Db.query(DatabaseConstants.tableWorkoutSessions)).length, 1);
+      expect((await v5Db.query(DatabaseConstants.tableAccessAttempts)).length, 1);
+      expect((await v5Db.query(DatabaseConstants.tableAppSettings)).length, 1);
+      expect((await v5Db.query(DatabaseConstants.tableXpRewards)).length, 1);
+      expect((await v5Db.query(DatabaseConstants.tableAchievements)).length, 1);
+
+      // v5 accepts 'pushUp'
+      await v5Db.insert(DatabaseConstants.tableWorkoutSessions, {
+        DatabaseConstants.colSessionId: 's_v5_pushup',
+        DatabaseConstants.colRequestId: 'req_v5_1',
+        DatabaseConstants.colChallengeId: 'pushup_free_5',
+        DatabaseConstants.colChallengeContext: 'freeWorkout',
+        DatabaseConstants.colExerciseType: 'pushUp',
+        DatabaseConstants.colTargetPackage: null,
+        DatabaseConstants.colCompletedRepetitions: 5,
+        DatabaseConstants.colDurationSeconds: 25,
+        DatabaseConstants.colCompletedAt: 1700000100000,
+        DatabaseConstants.colVerificationSource: 'camera',
+      });
+      expect((await v5Db.query(DatabaseConstants.tableWorkoutSessions)).length, 2);
+
+      // v5 rejects unknown exercise types
+      await expectLater(
+        () => v5Db.insert(DatabaseConstants.tableWorkoutSessions, {
+          DatabaseConstants.colSessionId: 's_v5_bad',
+          DatabaseConstants.colChallengeId: 'bad_5',
+          DatabaseConstants.colChallengeContext: 'freeWorkout',
+          DatabaseConstants.colExerciseType: 'burpees',
+          DatabaseConstants.colCompletedRepetitions: 5,
+          DatabaseConstants.colDurationSeconds: 10,
+          DatabaseConstants.colCompletedAt: 1700000200000,
+        }),
+        throwsA(isA<DatabaseException>()),
+      );
+
+      await v5Manager.close();
     });
   });
 }

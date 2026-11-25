@@ -3,6 +3,7 @@ import '../../../core/errors/challenge_exceptions.dart';
 import '../../../models/challenge_definition.dart';
 import '../../../models/challenge_request.dart';
 import '../../../models/challenge_type.dart';
+import '../../../models/exercise_type.dart';
 import '../data/challenge_catalog.dart';
 
 export '../../../core/errors/challenge_exceptions.dart';
@@ -35,7 +36,9 @@ abstract class IChallengeService {
   ChallengeRequest createUnlockChallengeRequest(String targetPackage);
 
   /// Creates and validates a new free workout challenge request.
-  ChallengeRequest createFreeWorkoutRequest();
+  ChallengeRequest createFreeWorkoutRequest({
+    ExerciseType exerciseType = ExerciseType.squats,
+  });
 
   /// Validates a [ChallengeRequest] against catalog definitions and context rules.
   ///
@@ -112,11 +115,15 @@ class ChallengeService implements IChallengeService {
   }
 
   @override
-  ChallengeRequest createFreeWorkoutRequest() {
-    final defaultFree = getDefaultFreeWorkout();
+  ChallengeRequest createFreeWorkoutRequest({
+    ExerciseType exerciseType = ExerciseType.squats,
+  }) {
+    final challengeDef = exerciseType == ExerciseType.pushUp
+        ? getChallengeDefinition(ChallengeCatalog.pushUpFreeWorkoutId)
+        : getDefaultFreeWorkout();
     final request = ChallengeRequest(
       requestId: _idGenerator(),
-      challengeId: defaultFree.challengeId,
+      challengeId: challengeDef.challengeId,
       context: ChallengeType.freeWorkout,
       targetPackage: null,
       createdAt: _clock(),
