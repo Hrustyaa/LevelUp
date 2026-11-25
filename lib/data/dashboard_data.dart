@@ -8,7 +8,7 @@ import '../features/progress/models/level_info.dart';
 import '../features/progress/models/streak_info.dart';
 import '../features/progress/models/xp_reward_record.dart';
 import '../features/statistics/models/statistics_snapshot.dart';
-import 'levelup_permissions.dart';
+import '../focus_v2/focus_v2_models.dart';
 
 enum DashboardLanguage { en, ru, kk }
 
@@ -93,13 +93,14 @@ class ExistingFocusGateway implements DashboardFocusGateway {
   }
 
   Future<FocusChallengeRequest?> claimChallenge() async {
-    if (!await const AndroidPermissionGateway().isAvailable()) return null;
     try {
       final response = await channel.invokeMethod<Object?>(
-        'consumeChallengeRequest',
+        'claimFocusChallenge',
       );
-      if (response case {'id': final String id, 'target': final String target}
-          when id.isNotEmpty && target.isNotEmpty) {
+      if (response case {
+        'id': final String id,
+        'target': final String target,
+      } when id.isNotEmpty && target.isNotEmpty) {
         return FocusChallengeRequest(id: id, target: target);
       }
       return null;
@@ -112,7 +113,7 @@ class ExistingFocusGateway implements DashboardFocusGateway {
     await channel.invokeMethod<bool>('cancelChallenge', {'id': request.id});
   }
 
-  Future<DateTime> completeChallenge(
+  Future<VerifiedFocusGrant> completeChallenge(
     FocusChallengeRequest request,
     int repetitions,
   ) async {
@@ -124,7 +125,15 @@ class ExistingFocusGateway implements DashboardFocusGateway {
     if (deadline == null) {
       throw StateError('No Focus access deadline returned');
     }
-    return DateTime.fromMillisecondsSinceEpoch(deadline);
+    final state = await read();
+    final expiry = state.accessUntil[request.target];
+    if (!state.active ||
+        expiry == null ||
+        expiry.millisecondsSinceEpoch != deadline ||
+        !expiry.isAfter(DateTime.now())) {
+      throw StateError('The Focus grant was not verified for this target');
+    }
+    return VerifiedFocusGrant(granted: true, accessUntil: expiry);
   }
 
   @override
@@ -229,6 +238,27 @@ class DashboardInsights {
   });
 
   /// null means unknown/unavailable, not zero. No estimated savings.
+  DashboardInsights withScreenTime(DashboardInsights usage) =>
+      DashboardInsights(
+        todayUsageMinutes: usage.todayUsageMinutes,
+        todayUnlocks: todayUnlocks,
+        todayWorkouts: todayWorkouts,
+        totalXp: totalXp,
+        levelInfo: levelInfo,
+        streakInfo: streakInfo,
+        completedWorkoutCount: completedWorkoutCount,
+        recentRewards: recentRewards,
+        progressError: progressError,
+        statistics: statistics,
+        statisticsError: statisticsError,
+        achievements: achievements,
+        achievementsError: achievementsError,
+        week: usage.week,
+        events: events,
+        usageByApp: usage.usageByApp,
+        historyReady: historyReady,
+      );
+
   final int? todayUsageMinutes, todayUnlocks, todayWorkouts, totalXp;
   final LevelInfo? levelInfo;
   final StreakInfo? streakInfo;

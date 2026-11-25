@@ -311,12 +311,18 @@ void main() {
       scope.coordinator.releaseTerminalSession();
       await tester.pumpAndSettle();
 
+      // The activity feed in the merged Progress view can scroll the level card out of view.
+      await tester.drag(find.byType(Scrollable).first, const Offset(0, 1400));
+      await tester.pumpAndSettle();
       expect(find.text('Level 2'), findsOneWidget);
       expect(find.text('0 / 200 XP · 100 total XP'), findsOneWidget);
       expect(find.text('1 day streak'), findsOneWidget);
 
       // Open Level detail screen -> verify remaining XP & XP history
-      await tester.tap(find.byKey(const ValueKey('home_level')));
+      final level = find.byKey(const ValueKey('home_level'));
+      await tester.ensureVisible(level);
+      await tester.pumpAndSettle();
+      await tester.tap(level);
       await tester.pumpAndSettle();
       expect(find.text('200 XP to Level 3'), findsOneWidget);
       expect(find.text('+50 XP'), findsNWidgets(2));

@@ -39,8 +39,9 @@ Widget _page({
 }) {
   return MaterialApp(
     builder: (context, child) => MediaQuery(
-      data: MediaQuery.of(context)
-          .copyWith(textScaler: TextScaler.linear(textScale)),
+      data: MediaQuery.of(
+        context,
+      ).copyWith(textScaler: TextScaler.linear(textScale)),
       child: child!,
     ),
     home: LevelUpAppSelectionScreen(

@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:levelup_test/app/challenge/production_challenge_screen.dart';
-import 'package:levelup_test/app/challenge/workout_exercise_screen.dart';
+import 'package:levelup_test/free_workout/workout_challenge_tab.dart';
 import 'package:levelup_test/focus_experience/focus_exercises.dart';
 import 'package:levelup_test/app/di/app_scope.dart';
 import 'package:levelup_test/core/constants/channel_constants.dart';
@@ -19,7 +19,7 @@ import 'package:levelup_test/features/settings/models/camera_permission_status.d
 import 'package:levelup_test/main_ui.dart';
 import 'package:levelup_test/models/access_attempt_record.dart';
 import 'package:levelup_test/screens/levelup_home_screen.dart';
-import 'package:levelup_test/screens/levelup_welcome_screen.dart';
+import 'package:levelup_test/onboarding_polish/levelup_welcome_polished.dart';
 import 'package:levelup_test/services/access_service.dart';
 import 'package:levelup_test/services/native_bridge.dart';
 import 'package:material_ui/material_ui.dart';
@@ -211,8 +211,8 @@ void main() {
       await tester.pumpWidget(LevelUpIntroDemo(scope: scope));
       await tester.pumpAndSettle();
 
-      expect(find.byType(LevelUpWelcomeScreen), findsOneWidget);
-      await tap(find.byKey(const Key('welcome_get_started')));
+      expect(find.byType(LevelUpWelcomePolishedScreen), findsOneWidget);
+      await tap(find.text('Get started'));
 
       // Step 1: Supported catalog shows YouTube, Instagram, TikTok
       expect(find.text('YouTube'), findsOneWidget);
@@ -349,12 +349,12 @@ void main() {
 
       expect(find.text('Workout'), findsOneWidget);
       expect(find.text('Quick Reset'), findsOneWidget);
-      final openChallengeBtn = find.text('Open workout');
+      final openChallengeBtn = find.byKey(const ValueKey('free_workout_open'));
       await tester.ensureVisible(openChallengeBtn);
       final cameraChecksBeforeChoice = cameraChecker.checkCount;
       await tester.tap(openChallengeBtn);
       await tester.pumpAndSettle();
-      expect(find.byType(WorkoutExerciseScreen), findsOneWidget);
+      expect(find.byType(WorkoutDetailsScreen), findsOneWidget);
       expect(find.text('Choose your exercise'), findsOneWidget);
       expect(find.text('+50 XP'), findsNWidgets(2));
       expect(find.byType(ProductionChallengeScreen), findsNothing);
@@ -377,7 +377,7 @@ void main() {
       await tester.tap(start);
       await tester.tapAt(startCenter);
       await tester.pump();
-      await tester.pump(const Duration(seconds: 2));
+      await tester.pump(const Duration(seconds: 9));
       await tester.pumpAndSettle();
 
       expect(find.byType(ProductionChallengeScreen), findsOneWidget);
@@ -386,7 +386,7 @@ void main() {
       );
       expect(screen.isUnlockChallenge, isFalse);
       expect(screen.exerciseType, ExerciseType.pushUp);
-      expect(find.byType(WorkoutExerciseScreen), findsNothing);
+      expect(find.byType(WorkoutDetailsScreen), findsNothing);
       expect(scope.coordinator.currentState.challenge?.exerciseType, ExerciseType.pushUp);
       expect(cameraChecker.checkCount, greaterThan(cameraChecksBeforeChoice));
       expect(started, {scope.coordinator.currentState.sessionId});
@@ -395,11 +395,11 @@ void main() {
       expect(FocusExercisePreferences(prefs).selected, {FocusExerciseId.squat});
       expect(methodCalls, isNot(contains(ChannelConstants.methodGrantAccess)));
       expect(methodCalls, isNot(contains('setGateLanguage')));
-      await tester.tap(find.byTooltip('Cancel challenge'));
+      await tester.tap(find.byKey(const ValueKey('production_workout_close')));
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
       expect(find.byType(ProductionChallengeScreen), findsNothing);
-      expect(find.text('Open workout'), findsOneWidget);
+      expect(find.byKey(const ValueKey('free_workout_open')), findsOneWidget);
       expect(scope.coordinator.currentState.sessionId, isNull);
     });
 

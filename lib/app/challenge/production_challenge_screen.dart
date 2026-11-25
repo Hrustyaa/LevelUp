@@ -1,23 +1,26 @@
 import 'dart:async';
 
-import 'package:camera/camera.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../features/pose_detection/presentation/pose_overlay_widget.dart';
 import '../../focus_experience/focus_exercises.dart';
-import '../../focus_experience/focus_screens.dart';
+import '../../focus_v2/focus_camera_cover.dart';
+import '../../focus_v2/focus_v2_models.dart';
+import '../../focus_v2/focus_v2_screens.dart';
+import '../../free_workout/workout_challenge_tab.dart';
+import '../../free_workout/workout_session.dart' as presentation;
 import '../../focus_experience/focus_style.dart';
 import '../../models/exercise_type.dart';
+import '../../models/workout_result.dart';
 import '../di/app_scope.dart';
 import 'production_challenge_controller.dart';
 
-/// Production challenge route connecting [FocusChallengeScreen] and
-/// [FocusAccessGrantedScreen] to [ProductionChallengeController] and
-/// [CoreIntegrationCoordinator].
+/// Production presentation for the existing verified challenge controller.
 class ProductionChallengeScreen extends StatefulWidget {
   final AppScope scope;
   final bool isUnlockChallenge;
   final String appName;
+  final FocusTarget? target;
   final String language;
   final FocusExercise? exercise;
   final ExerciseType exerciseType;
@@ -29,6 +32,7 @@ class ProductionChallengeScreen extends StatefulWidget {
     required this.scope,
     required this.isUnlockChallenge,
     required this.appName,
+    this.target,
     this.language = 'ru',
     this.exercise,
     this.exerciseType = ExerciseType.squats,
@@ -46,6 +50,7 @@ class _ProductionChallengeScreenState extends State<ProductionChallengeScreen>
   late final ProductionChallengeController _controller;
   late final FocusExercise _exercise;
   bool _closing = false;
+  Future<WorkoutResult?>? _result;
 
   @override
   void initState() {
@@ -98,120 +103,112 @@ class _ProductionChallengeScreenState extends State<ProductionChallengeScreen>
     super.dispose();
   }
 
+  void _finish() {
+    _controller.releaseCompletedSession();
+    Navigator.of(context).pop();
+  }
+
+  String _tr(String ru, String en, String kk) =>
+      focusTr(widget.language, ru, en, kk);
+
+  Future<WorkoutResult?> _readResult() {
+    final id = widget.scope.coordinator.currentState.sessionId;
+    return id == null
+        ? Future.value()
+        : widget.scope.workoutHistoryRepository.getWorkoutBySessionId(id);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final goal = _controller.targetRepetitions;
     if (_controller.isUnlockConfirmed) {
-      return FocusAccessGrantedScreen(
-        appName: widget.appName,
+      return FocusV2SuccessScreen(
+        target:
+            widget.target ??
+            FocusTarget(packageName: '', appName: widget.appName),
+        goalReps: goal,
         accessMinutes: _controller.grantedMinutes,
         language: widget.language,
-        onDone: () {
-          _controller.releaseCompletedSession();
-          Navigator.of(context).pop();
-        },
+        actionText: _tr('Готово', 'Done', 'Дайын'),
+        onOpenApp: _finish,
       );
     }
 
     if (_controller.isFreeWorkoutCompleted) {
-      final exerciseName = _controller.exerciseType == ExerciseType.pushUp
-          ? focusTr(widget.language, 'отжиманий', 'push-ups', 'қолды бүгіп-жазу')
-          : focusTr(widget.language, 'приседаний', 'squats', 'отырып-тұру');
-      return Theme(
-        data: FocusStyle.theme(),
-        child: Scaffold(
-          body: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(
-                    Icons.check_circle_outline_rounded,
-                    size: 64,
-                    color: FocusStyle.accent,
-                  ),
-                  const SizedBox(height: 18),
-                  Text(
-                    focusTr(
-                      widget.language,
-                      'Тренировка завершена',
-                      'Workout complete',
-                      'Жаттығу аяқталды',
-                    ),
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 27,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    focusTr(
-                      widget.language,
-                      'Выполнено ${_controller.repetitions} / ${_controller.targetRepetitions} $exerciseName. Добровольная тренировка не меняет доступ к приложениям.',
-                      'Completed ${_controller.repetitions} / ${_controller.targetRepetitions} $exerciseName. Free workouts do not grant app access.',
-                      '${_controller.repetitions} / ${_controller.targetRepetitions} $exerciseName орындалды. Еркін жаттығу қолданбаға рұқсат бермейді.',
-                    ),
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: FocusStyle.muted,
-                      fontSize: 15,
-                    ),
-                  ),
-                  const SizedBox(height: 28),
-                  FocusPrimaryButton(
-                    text: focusTr(widget.language, 'Готово', 'Done', 'Дайын'),
-                    onPressed: () {
-                      _controller.releaseCompletedSession();
-                      Navigator.of(context).pop();
-                    },
-                  ),
-                ],
+      return FutureBuilder<WorkoutResult?>(
+        future: _result ??= _readResult(),
+        builder: (context, snapshot) {
+          final result = snapshot.data;
+          if (result != null) {
+            return WorkoutResultScreen(
+              result: presentation.WorkoutResult(
+                exercise: result.exerciseType.name,
+                startedAt: result.completedAt.subtract(result.duration),
+                endedAt: result.completedAt,
+                sets: [result.completedRepetitions],
               ),
+              saved: true,
+              language: widget.language,
+              onDone: _finish,
+            );
+          }
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
+          return FocusV2ErrorScreen(
+            message: _tr(
+              'Не удалось загрузить итоги тренировки.',
+              'Could not load the workout result.',
+              'Жаттығу нәтижесі жүктелмеді.',
             ),
-          ),
-        ),
+            language: widget.language,
+            onCancel: _finish,
+          );
+        },
       );
     }
 
     final camera = _controller.cameraController;
-    final Widget? preview = _controller.isFinalizing
-        ? null
-        : camera != null && camera.value.isInitialized
-        ? Stack(
-            fit: StackFit.passthrough,
-            children: [
-              CameraPreview(camera),
-              Positioned.fill(
-                child: PoseOverlayWidget(
-                  listenable: _controller.poseOverlayListenable,
-                ),
-              ),
-            ],
+    final preview =
+        camera != null &&
+            camera.value.isInitialized &&
+            !_controller.isFinalizing
+        ? focusV2CameraCover(
+            camera,
+            overlay: PoseOverlayWidget(
+              listenable: _controller.poseOverlayListenable,
+            ),
           )
-        : _controller.error != null
-        ? const Icon(Icons.no_photography_outlined)
-        : const CircularProgressIndicator();
-
+        : const Center(child: CircularProgressIndicator());
+    final error = _controller.error;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) unawaited(_handleCancel());
       },
-      child: FocusChallengeScreen(
-        exercise: _exercise,
-        repetitions: _controller.repetitions,
-        language: widget.language,
-        cameraReady: _controller.cameraReady,
-        trackingReady: _controller.trackingReady,
-        cameraPreview: preview,
-        hint: _controller.hint,
-        error: _controller.error,
-        onCancel: _controller.isFinalizing ? null : _handleCancel,
-        onRetry: _controller.canRetry
-            ? () => unawaited(_controller.retry())
-            : null,
-      ),
+      child: error != null
+          ? FocusV2ErrorScreen(
+              message: error,
+              language: widget.language,
+              onCancel: _handleCancel,
+              onRetry: _controller.canRetry
+                  ? () => unawaited(_controller.retry())
+                  : null,
+            )
+          : FocusV2CameraScreen(
+              cameraPreview: preview,
+              exerciseName: _exercise.name(widget.language),
+              repetitions: _controller.repetitions,
+              goalReps: goal,
+              poseDetected: _controller.trackingReady,
+              verifying: _controller.isFinalizing,
+              language: widget.language,
+              isFreeWorkout: !widget.isUnlockChallenge,
+              status: _controller.hint,
+              onCancel: _controller.isFinalizing ? null : _handleCancel,
+            ),
     );
   }
 }

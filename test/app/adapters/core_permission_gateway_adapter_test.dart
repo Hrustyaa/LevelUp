@@ -153,5 +153,31 @@ void main() {
         1,
       );
     });
+    test('8. Supplemental Android permissions use their own channel', () async {
+      const channel = MethodChannel('levelup/permissions');
+      final calls = <(String, Object?)>[];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add((call.method, (call.arguments as Map?)?['permission']));
+        return switch (call.method) {
+          'getStates' => {'accessibility': 'granted', 'usage': 'granted', 'notifications': 'denied'},
+          _ => null,
+        };
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      final productionAdapter = CorePermissionGatewayAdapter(
+        settingsService: settingsService,
+        nativeBridge: const NativeBridge(),
+        cameraChecker: cameraChecker,
+        optionalPermissions: const AndroidPermissionGateway(),
+      );
+      final states = await productionAdapter.read();
+      expect(states[LevelUpPermission.accessibility], PermissionState.denied);
+      expect(states[LevelUpPermission.usage], PermissionState.granted);
+      expect(states[LevelUpPermission.notifications], PermissionState.denied);
+      await productionAdapter.request(LevelUpPermission.notifications);
+      await productionAdapter.openPermissionSettings(LevelUpPermission.usage);
+      expect(calls, [('getStates', null), ('request', 'notifications'), ('openPermissionSettings', 'usage')]);
+      expect(methodCalls, isNot(contains(ChannelConstants.methodGrantAccess)));
+    });
   });
 }

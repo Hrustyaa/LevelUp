@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import '../../core/integration/core_integration_coordinator.dart';
 import '../../data/database/levelup_database.dart';
+import '../../data/levelup_permissions.dart';
 import '../../data/repositories/access_attempt_repository.dart';
 import '../../data/repositories/workout_history_repository.dart';
 import '../../features/achievements/application/achievement_service.dart';
@@ -137,6 +138,7 @@ class AppScope {
     INativeBridge? nativeBridge,
     ICameraPermissionChecker? cameraChecker,
     DateTime Function()? clock,
+    AndroidPermissionGateway? optionalPermissions,
   }) {
     final effectiveBridge = nativeBridge ?? const NativeBridge();
     final effectiveDb = database ?? LevelUpDatabase();
@@ -221,6 +223,12 @@ class AppScope {
       settingsRepository: settingsRepo,
       cameraChecker: effectiveChecker,
       settingsService: settingsService,
+      permissionGateway: CorePermissionGatewayAdapter(
+        settingsService: settingsService,
+        nativeBridge: effectiveBridge,
+        cameraChecker: effectiveChecker,
+        optionalPermissions: optionalPermissions,
+      ),
       workoutHistoryRepository: historyRepo,
       accessAttemptRepository: accessRepo,
       progressRepository: progressRepo,

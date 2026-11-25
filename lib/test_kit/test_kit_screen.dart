@@ -110,7 +110,6 @@ class _AndroidTestKitState extends State<_AndroidTestKit>
       MaterialPageRoute<void>(
         builder: (_) => ChallengeScreen(
           exercise: focusExercises.first,
-          appName: testApps[request?.target ?? state['target']] ?? 'LevelUp',
           onCompleted: request == null
               ? null
               : (repetitions) =>
@@ -178,8 +177,9 @@ class _AndroidTestKitState extends State<_AndroidTestKit>
     final enabled = state['enabled'] == true;
     final serviceEnabled = state['serviceEnabled'] == true;
     final unlockUntil = (state['unlockUntil'] as num? ?? 0).toInt();
-    final remaining = DateTime.fromMillisecondsSinceEpoch(unlockUntil)
-        .difference(DateTime.now());
+    final remaining = DateTime.fromMillisecondsSinceEpoch(
+      unlockUntil,
+    ).difference(DateTime.now());
     return Scaffold(
       appBar: AppBar(
         title: const Text('LEVELUP / TEST'),

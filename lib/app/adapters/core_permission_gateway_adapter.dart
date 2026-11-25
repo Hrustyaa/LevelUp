@@ -7,27 +7,36 @@ import '../../services/native_bridge.dart';
 /// Production adapter implementing [LevelUpPermissionGateway] using real Core services.
 ///
 /// Binds UI permission screens to [ISettingsService], [INativeBridge], and [ICameraPermissionChecker].
-/// Honestly reports unsupported optional capabilities (Usage, Notifications) as [PermissionState.unavailable],
-/// never pretending they are granted or supported by the native gate.
+/// Optional Android permissions use the supplemental permissions channel.
 class CorePermissionGatewayAdapter implements LevelUpPermissionGateway {
   final ISettingsService _settingsService;
   final INativeBridge _nativeBridge;
   final ICameraPermissionChecker _cameraChecker;
+  final AndroidPermissionGateway? _optionalPermissions;
 
   CorePermissionGatewayAdapter({
     required ISettingsService settingsService,
     required INativeBridge nativeBridge,
     ICameraPermissionChecker? cameraChecker,
-  })  : _settingsService = settingsService,
-        _nativeBridge = nativeBridge,
-        _cameraChecker = cameraChecker ??
-            DefaultCameraPermissionChecker(nativeBridge: nativeBridge);
+    AndroidPermissionGateway? optionalPermissions,
+  }) : _optionalPermissions = optionalPermissions,
+       _settingsService = settingsService,
+       _nativeBridge = nativeBridge,
+       _cameraChecker =
+           cameraChecker ??
+           DefaultCameraPermissionChecker(nativeBridge: nativeBridge);
 
   @override
   Future<Map<LevelUpPermission, PermissionState>> read() async {
     final settingsState = await _settingsService.refresh();
     final cameraStatus = await _cameraChecker.checkCameraPermission();
 
+    Map<LevelUpPermission, PermissionState> platformPermissions;
+    try {
+      platformPermissions = await _optionalPermissions?.read() ?? const {};
+    } catch (_) {
+      platformPermissions = const {};
+    }
     return {
       LevelUpPermission.accessibility: settingsState.isAccessibilityGranted
           ? PermissionState.granted
@@ -39,9 +48,12 @@ class CorePermissionGatewayAdapter implements LevelUpPermissionGateway {
         CameraPermissionStatus.denied ||
         CameraPermissionStatus.restricted => PermissionState.denied,
       },
-      // Unsupported by native gate: honestly reported as unavailable, never fake-granted
-      LevelUpPermission.usage: PermissionState.unavailable,
-      LevelUpPermission.notifications: PermissionState.unavailable,
+      LevelUpPermission.usage:
+          platformPermissions[LevelUpPermission.usage] ??
+          PermissionState.unavailable,
+      LevelUpPermission.notifications:
+          platformPermissions[LevelUpPermission.notifications] ??
+          PermissionState.unavailable,
     };
   }
 
@@ -54,8 +66,7 @@ class CorePermissionGatewayAdapter implements LevelUpPermissionGateway {
         await _cameraChecker.requestCameraPermission();
       case LevelUpPermission.usage:
       case LevelUpPermission.notifications:
-        // Do not request or pretend to grant unsupported permissions
-        break;
+        await _optionalPermissions?.request(permission);
     }
   }
 
@@ -73,7 +84,7 @@ class CorePermissionGatewayAdapter implements LevelUpPermissionGateway {
         await _nativeBridge.openAppSettings();
       case LevelUpPermission.usage:
       case LevelUpPermission.notifications:
-        break;
+        await _optionalPermissions?.openPermissionSettings(permission);
     }
   }
 }

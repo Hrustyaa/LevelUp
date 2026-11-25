@@ -76,80 +76,70 @@ class _LevelUpWelcomeScreenState extends State<LevelUpWelcomeScreen> {
         ),
         child: Scaffold(
           backgroundColor: background,
-          body: Stack(
-            fit: StackFit.expand,
-            children: [
-              const IgnorePointer(
-                child: CustomPaint(painter: _WelcomeBackground()),
-              ),
-              SafeArea(
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final compact = constraints.maxHeight < 740;
-                    final padding = compact ? 12.0 : 20.0;
-                    final textScaler = MediaQuery.textScalerOf(context);
-                    final pinActions =
-                        constraints.maxHeight >= 560 &&
-                        textScaler.scale(17) <= 22;
-                    final actions = Padding(
-                      padding: EdgeInsets.only(top: compact ? 12 : 16),
-                      child: _actions(context),
-                    );
+          body: SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final compact = constraints.maxHeight < 740;
+                final padding = compact ? 12.0 : 20.0;
+                final textScaler = MediaQuery.textScalerOf(context);
+                final pinActions =
+                    constraints.maxHeight >= 560 && textScaler.scale(17) <= 22;
+                final actions = Padding(
+                  padding: EdgeInsets.only(top: compact ? 12 : 16),
+                  child: _actions(context),
+                );
 
-                    return Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: padding,
-                      ),
-                      child: Center(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 480),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              _languagePicker(),
-                              Expanded(
-                                child: SingleChildScrollView(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      _brand(compact),
-                                      SizedBox(height: compact ? 10 : 18),
-                                      _headline(compact),
-                                      SizedBox(height: compact ? 14 : 22),
-                                      _feature(
-                                        Icons.lock_outline_rounded,
-                                        copy.features[0],
-                                        compact,
-                                      ),
-                                      const SizedBox(height: 8),
-                                      _feature(
-                                        Icons.directions_walk_rounded,
-                                        copy.features[1],
-                                        compact,
-                                      ),
-                                      const SizedBox(height: 8),
-                                      _feature(
-                                        Icons.timer_outlined,
-                                        copy.features[2],
-                                        compact,
-                                      ),
-                                      if (!pinActions) actions,
-                                    ],
+                return Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: padding,
+                  ),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 480),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _languagePicker(),
+                          Expanded(
+                            child: SingleChildScrollView(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _brand(compact),
+                                  SizedBox(height: compact ? 10 : 18),
+                                  _headline(compact),
+                                  SizedBox(height: compact ? 14 : 22),
+                                  _feature(
+                                    Icons.lock_outline_rounded,
+                                    copy.features[0],
+                                    compact,
                                   ),
-                                ),
+                                  const SizedBox(height: 8),
+                                  _feature(
+                                    Icons.directions_walk_rounded,
+                                    copy.features[1],
+                                    compact,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  _feature(
+                                    Icons.timer_outlined,
+                                    copy.features[2],
+                                    compact,
+                                  ),
+                                  if (!pinActions) actions,
+                                ],
                               ),
-                              if (pinActions) actions,
-                            ],
+                            ),
                           ),
-                        ),
+                          if (pinActions) actions,
+                        ],
                       ),
-                    );
-                  },
-                ),
-              ),
-            ],
+                    ),
+                  ),
+                );
+              },
+            ),
           ),
         ),
       ),
@@ -447,41 +437,6 @@ class _LevelUpWelcomeScreenState extends State<LevelUpWelcomeScreen> {
   }
 }
 
-/// Subtle, static decorative arcs. No raster mockup or continuous animation.
-class _WelcomeBackground extends CustomPainter {
-  const _WelcomeBackground();
-  @override
-  void paint(Canvas canvas, Size size) {
-    final width = size.width;
-    final height = size.height;
-    final paint = Paint()
-      ..color = const Color(0x887EA928)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.1;
-    final top = Path()
-      ..moveTo(-width * 0.1, height * 0.16)
-      ..quadraticBezierTo(
-        width * 0.16,
-        height * 0.02,
-        width * 0.46,
-        -height * 0.025,
-      );
-    final bottom = Path()
-      ..moveTo(width * 0.25, height * 1.025)
-      ..quadraticBezierTo(
-        width * 0.65,
-        height * 0.925,
-        width * 1.08,
-        height * 0.90,
-      );
-    canvas.drawPath(top, paint);
-    canvas.drawPath(bottom, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant _WelcomeBackground oldDelegate) => false;
-}
-
 class _Feature {
   const _Feature(this.title, this.description);
   final String title, description;
@@ -528,7 +483,8 @@ const _copy = <LevelUpLanguage, _WelcomeCopy>{
   LevelUpLanguage.ru: _WelcomeCopy(
     headline1: 'Меньше скроллинга.',
     headline2: 'Больше жизни.',
-    description: 'Фокус добровольный. Его можно приостановить или выключить в любой момент.',
+    description:
+        'Фокус добровольный. Его можно приостановить или выключить в любой момент.',
     features: [
       _Feature('Выбери приложения', 'Укажи приложение для ограничения.'),
       _Feature('Сделай 5 приседаний', 'Задание можно пропустить.'),
@@ -542,7 +498,8 @@ const _copy = <LevelUpLanguage, _WelcomeCopy>{
       'При открытии приложения сделай 5 приседаний или пропусти задание.',
       'После 5 приседаний приложение откроется на 5 минут.',
     ],
-    control: 'Чтобы сделать паузу, выключи фокус. Ты сам решаешь, когда включить его снова.',
+    control:
+        'Чтобы сделать паузу, выключи фокус. Ты сам решаешь, когда включить его снова.',
   ),
   LevelUpLanguage.kk: _WelcomeCopy(
     headline1: 'Телефонға аз уақыт.',
@@ -562,6 +519,7 @@ const _copy = <LevelUpLanguage, _WelcomeCopy>{
       'Қолданбаны ашқанда 5 рет отырып-тұр немесе тапсырмадан бас тарт.',
       '5 рет отырып-тұрсаң, қолданба 5 минутқа ашылады.',
     ],
-    control: 'Үзіліс керек болса, фокусты өшір. Оны қашан қайта қосатыныңды өзің шешесің.',
+    control:
+        'Үзіліс керек болса, фокусты өшір. Оны қашан қайта қосатыныңды өзің шешесің.',
   ),
 };

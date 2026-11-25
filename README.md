@@ -1,4 +1,41 @@
-# LevelUp — Unified Master Plan
+# Level Up
+
+Level Up is an Android Flutter app for managing distracting screen time through voluntary Focus and short, camera-verified workouts. The Android launcher displays **Level Up** with the teammate’s original artwork. The existing Android app ID remains `com.levelup.levelup_test`.
+
+## Current MVP
+
+- **Home** displays real XP, level, progress, activity and Focus status. The setup checklist uses saved app selection and current permission status.
+- **Focus** protects one installed supported app at a time. The Android AccessibilityService Gate offers five verified squats or frontal push-ups according to the saved Focus exercise setting. A successful challenge gives the requested app 300 seconds of access. You can disable Focus or leave the Gate without doing a workout.
+- **Challenges** includes a pre-camera exercise selector and Quick Reset, a one-minute camera-free break. Free Workouts use the same verified camera controller and never authorize app access.
+- **Progress** includes workout history and details, exercise-specific totals, weekly activity, levels, streaks and six achievements. Each eligible completed workout earns 50 XP once. Optional Android Usage Access supplies measured screen time for selected apps.
+- **Settings** includes language, app selection, Focus Rules, unlock exercise selection, permissions, notifications, privacy and about. English, Russian and Kazakh are supported. Manual Focus notifications require permission.
+
+## Architecture and limits
+
+`lib/main_ui.dart` starts the production `AppScope`. The teammate’s Flutter widgets render snapshots from the existing Focus, Settings, Progress, Statistics and Achievement services. The shared camera controller runs one ML Kit detector and the selected counter. The full-body overlay is presentation only. The coordinator writes verified sessions and their access journal to SQLite v5, and Android authorizes against a one-use Gate claim for the exact requested package. The audited SQLite history, verification sources, rewards, settings and achievements carry forward.
+
+Focus currently supports YouTube, Instagram and TikTok. Custom schedules, timed Focus sessions and configurable unlock durations remain drafts. Production workouts are five-rep sets. Extra exercise options that lack verified counters and the prototype’s multi-set workflow remain unavailable. Screen time saved has no data source. The Developer Lab uses its separate development entry point and simulation storage. See the integration report for build and hardware verification status.
+
+## Run, build and test
+
+```bash
+flutter pub get
+flutter run -t lib/main_ui.dart
+flutter run -t lib/main_dev.dart
+flutter analyze --no-pub
+flutter test --no-pub
+flutter build apk --debug -t lib/main_ui.dart --no-pub
+flutter build apk --debug -t lib/main_dev.dart --no-pub
+cd android && ./gradlew :app:testDebugUnitTest
+```
+
+Build a main app release with `flutter build apk --release -t lib/main_ui.dart --no-pub`. The app’s Android configuration currently uses the debug key for local release builds. The integration and device checklists are in the [integration report](docs/module-12-ui-core-integration.md) and [Module 12A audit](docs/module-12a-stability-audit.md).
+
+---
+
+## Historical product and pitch plan
+
+The plan below records the original product and competition milestones before the final UI integration. The current implementation is described above.
 
 **Less Scrolling. More Living.**  
 **Product vision · Competition MVP · Development roadmap · Business · Team workflow**

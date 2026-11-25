@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart' show setEquals;
@@ -6,7 +7,6 @@ import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app/challenge/production_challenge_screen.dart';
-import 'app/challenge/workout_exercise_screen.dart';
 import 'app/di/app_scope.dart';
 import 'core/constants/channel_constants.dart';
 import 'data/android_app_catalog.dart';
@@ -14,8 +14,16 @@ import 'data/android_usage_gateway.dart';
 import 'data/dashboard_data.dart';
 import 'data/levelup_permissions.dart';
 import 'focus_experience/focus_exercises.dart';
-import 'focus_experience/focus_screens.dart';
+import 'focus_v2/focus_v2_models.dart';
+import 'free_workout/workout_challenge_tab.dart';
 import 'models/exercise_type.dart';
+import 'onboarding_polish/levelup_welcome_polished.dart';
+import 'permission_apps/levelup_manage_apps_screen.dart';
+import 'permission_apps/levelup_permissions_screen.dart' as permissions_page;
+import 'permission_apps/permission_apps_models.dart';
+import 'progress/progress_repository.dart';
+import 'settings/settings_permissions.dart' as permission_ui;
+import 'settings/settings_tab.dart';
 import 'screens/app_permissions_screen.dart';
 import 'screens/levelup_app_selection_screen.dart';
 import 'screens/levelup_focus_setup_screen.dart';
@@ -25,11 +33,12 @@ import 'screens/levelup_splash_screen.dart';
 import 'screens/levelup_welcome_screen.dart';
 import 'screens/manage_apps_screen.dart';
 import 'test_kit/challenge_screen.dart';
-import 'test_kit/test_kit_screen.dart' show testApps;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final scope = AppScope.production();
+  final scope = AppScope.production(
+    optionalPermissions: const AndroidPermissionGateway(),
+  );
   try {
     await scope.initialize();
   } catch (error) {
@@ -69,7 +78,7 @@ class _LevelUpIntroDemoState extends State<LevelUpIntroDemo> {
   @override
   Widget build(BuildContext context) {
     final app = MaterialApp(
-      title: 'LevelUp',
+      title: 'Level Up',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
@@ -153,6 +162,9 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
   bool _appSelectionOpen = false;
   bool _challengeOpen = false;
   int _homeRefreshToken = 0;
+  late final _progressRepository = LocalProgressRepository(
+    history: _scope?.workoutHistoryRepository,
+  );
 
   AppScope? get _scope => widget.scope ?? AppScope.maybeOf(context);
 
@@ -173,10 +185,9 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
         ),
       };
 
-  AppLoader get _loadApps =>
-      _scope != null
-          ? _scope!.appCatalog.loadSupportedApps
-          : const AndroidAppCatalog().load;
+  AppLoader get _loadApps => _scope != null
+      ? _scope!.appCatalog.loadSupportedApps
+      : const AndroidAppCatalog().load;
 
   Future<_AppState> _loadInitialState() async {
     try {
@@ -295,7 +306,10 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
   }
 
   Future<void> _syncGateLanguage(LevelUpLanguage language) async {
-    if (_scope != null) return; // MainActivity.kt does not register setGateLanguage
+    if (_scope != null) {
+      // The native Gate reads the persisted Flutter language in production.
+      return;
+    }
     try {
       await ExistingFocusGateway.channel.invokeMethod<void>('setGateLanguage', {
         'language': language.name,
@@ -349,6 +363,14 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
               exerciseType: session.exerciseType,
               unlockSessionId: session.sessionId,
               appName: appName,
+              target: FocusTarget(
+                packageName: target ?? '',
+                appName: appName,
+                iconBytes: _catalog
+                    .where((app) => app.id == target)
+                    .firstOrNull
+                    ?.icon,
+              ),
               language: _language.name,
             ),
           ),
@@ -380,16 +402,10 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
       await exercises.recordAssignment(exercise.id);
       if (!mounted) return;
 
-      final target = claimed.target;
-      final appName =
-          _catalog.where((app) => app.id == target).firstOrNull?.name ??
-          testApps[target] ??
-          target;
       await Navigator.of(context).push<void>(
         MaterialPageRoute(
           builder: (_) => ChallengeScreen(
             exercise: exercise,
-            appName: appName,
             language: _language.name,
             onCompleted: (repetitions) =>
                 gateway.completeChallenge(claimed, repetitions),
@@ -422,8 +438,8 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
     if (!mounted) return;
     final selected = await Navigator.of(context).push<Set<FocusExerciseId>>(
       MaterialPageRoute(
-        builder: (routeContext) => FocusExerciseSettingsScreen(
-          language: _language.name,
+        builder: (routeContext) => LevelUpUnlockChallengeSettingsScreen(
+          language: _toDashboardLanguage(_language),
           initialSelection: exercises.selected,
           supportsPushUps: supportsPushUps,
           onSave: (selection) => Navigator.of(routeContext).pop(selection),
@@ -580,12 +596,16 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
     };
   }
 
-  Future<DashboardInsights> _loadDashboardInsights() {
+  Future<DashboardInsights> _loadDashboardInsights() async {
     final selection = _focusSetupDraft?.packageIds ?? _appSelectionDraft;
-    if (_scope != null) {
-      return _scope!.insightsAdapter.loadInsights(selection);
-    }
-    return const AndroidUsageGateway().read(selection);
+    final usage = const AndroidUsageGateway()
+        .read(selection)
+        .timeout(const Duration(seconds: 2))
+        .catchError((Object _) => const DashboardInsights());
+    final scope = _scope;
+    if (scope == null) return usage;
+    final insights = await scope.insightsAdapter.loadInsights(selection);
+    return insights.withScreenTime(await usage);
   }
 
   Future<void> _handleMovementNotice() async {
@@ -617,7 +637,10 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
               foregroundColor: LevelUpColors.background,
             ),
             onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('OK', style: TextStyle(fontWeight: FontWeight.w700)),
+            child: const Text(
+              'OK',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
           ),
         ],
       ),
@@ -635,8 +658,11 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
     try {
       final exercise = await Navigator.of(context).push<ExerciseType>(
         MaterialPageRoute(
-          builder: (_) => WorkoutExerciseScreen(
-            initialExercise: scope.settingsService.currentState.settings
+          builder: (_) => WorkoutDetailsScreen(
+            initialExercise: scope
+                .settingsService
+                .currentState
+                .settings
                 .preferredExerciseType,
             language: _language.name,
           ),
@@ -703,18 +729,21 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
       catalog: _catalog,
       draftIds: _focusSetupDraft?.packageIds ?? _appSelectionDraft,
       draftSummary: _formatDraftSummary(_focusSetupDraft, _language),
+      onLoadSetupPermissions: _scope == null ? null : _permissionGateway.read,
       focusDraft: _focusSetupDraft,
       capabilities: const FocusCapabilities(),
       onSaveFocusDraft: _saveFocusDraft,
       refreshToken: _homeRefreshToken,
       progressStream: _scope?.progressService.stateStream,
+      progressRepository: _progressRepository,
       statisticsStream: _scope?.statisticsService.snapshotStream,
       achievementStream: _scope?.achievementService.stateStream,
       soundFeedbackEnabled: settings?.soundFeedbackEnabled,
       diagnosticLoggingEnabled: settings?.diagnosticLoggingEnabled,
       onSoundFeedbackChanged: _scope != null ? _updateSoundFeedback : null,
-      onDiagnosticLoggingChanged:
-          _scope != null ? _updateDiagnosticLogging : null,
+      onDiagnosticLoggingChanged: _scope != null
+          ? _updateDiagnosticLogging
+          : null,
       logoAsset: 'assets/images/levelup_mark.png',
       onEditFocus: () async {
         await _openManageApps();
@@ -723,9 +752,16 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
       onPermissions: () async {
         await _openAppPermissions();
       },
+      onNotifications: () async {
+        // Opens Android Settings; this does not claim notifications are implemented.
+        await const AndroidPermissionGateway().openPermissionSettings(
+          LevelUpPermission.notifications,
+        );
+      },
       onEnableFocus: () async {
         await _handleEnableFocus();
       },
+      onDisableFocus: _handlePauseFocus,
       onPauseFocus: () async {
         await _handlePauseFocus();
       },
@@ -742,18 +778,47 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
   Future<void> _openManageApps() async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
-        builder: (_) => ManageAppsScreen(
-          language: _toDashboardLanguage(_language),
-          initialSelectedIds:
-              _focusSetupDraft?.packageIds ?? _appSelectionDraft,
-          loadApps: () => _loadApps(),
-          onSave: (selectedIds) => _saveFocusDraft(
-            (_focusSetupDraft ??
-                    FocusSetupDraft(packageIds: _appSelectionDraft))
-                .copyWith(packageIds: selectedIds),
-            verifyTarget: true,
-          ),
-        ),
+        builder: (_) => _scope != null
+            ? LevelUpManageAppsScreen(
+                language: _toDashboardLanguage(_language),
+                loadApps: () async => [
+                  for (final app in await _loadApps())
+                    LevelUpInstalledApp(
+                      packageId: app.packageId,
+                      displayName: app.name,
+                      iconPng: app.icon,
+                    ),
+                ],
+                loadSelectedTarget: () async {
+                  final configured =
+                      _focusSetupDraft?.packageIds ?? _appSelectionDraft;
+                  if (configured.isEmpty) return null;
+                  final target = await _scope!.focusService.getSelectedTarget();
+                  return configured.contains(target)
+                      ? target
+                      : configured.singleOrNull;
+                },
+                saveTarget: (id) async {
+                  await _scope!.focusService.selectTargetApp(id);
+                  await _saveFocusDraft(
+                    (_focusSetupDraft ??
+                            FocusSetupDraft(packageIds: _appSelectionDraft))
+                        .copyWith(packageIds: {id}),
+                  );
+                },
+              )
+            : ManageAppsScreen(
+                language: _toDashboardLanguage(_language),
+                initialSelectedIds:
+                    _focusSetupDraft?.packageIds ?? _appSelectionDraft,
+                loadApps: () => _loadApps(),
+                onSave: (selectedIds) => _saveFocusDraft(
+                  (_focusSetupDraft ??
+                          FocusSetupDraft(packageIds: _appSelectionDraft))
+                      .copyWith(packageIds: selectedIds),
+                  verifyTarget: true,
+                ),
+              ),
       ),
     );
   }
@@ -775,8 +840,10 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
               content: Text(switch (_language) {
                 LevelUpLanguage.en =>
                   'Focus turned off because its current app was removed.',
-                LevelUpLanguage.ru => 'Фокус выключен, потому что текущее приложение удалено из списка.',
-                LevelUpLanguage.kk => 'Ағымдағы қолданба тізімнен алынды, сондықтан фокус өшірілді.',
+                LevelUpLanguage.ru =>
+                  'Фокус выключен, потому что текущее приложение удалено из списка.',
+                LevelUpLanguage.kk =>
+                  'Ағымдағы қолданба тізімнен алынды, сондықтан фокус өшірілді.',
               }),
             ),
           );
@@ -797,6 +864,17 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
     });
   }
 
+  LevelUpPermission _nativePermission(
+    permission_ui.LevelUpPermission permission,
+  ) => switch (permission) {
+    permission_ui.LevelUpPermission.usageAccess => LevelUpPermission.usage,
+    permission_ui.LevelUpPermission.accessibility =>
+      LevelUpPermission.accessibility,
+    permission_ui.LevelUpPermission.camera => LevelUpPermission.camera,
+    permission_ui.LevelUpPermission.notifications =>
+      LevelUpPermission.notifications,
+  };
+
   Future<void> _openAppPermissions() async {
     final openSettings = _scope != null
         ? _scope!.permissionGateway.openPermissionSettings
@@ -804,11 +882,34 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
 
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
-        builder: (_) => AppPermissionsScreen(
-          gateway: _permissionGateway,
-          openPermissionSettings: openSettings,
-          language: _toDashboardLanguage(_language),
-        ),
+        builder: (_) => _scope != null
+            ? permissions_page.LevelUpPermissionsScreen(
+                language: _toDashboardLanguage(_language),
+                loadStates: () async {
+                  final states = await _permissionGateway.read();
+                  return permission_ui.LevelUpPermissionSnapshot({
+                    for (final permission
+                        in permission_ui.LevelUpPermission.values)
+                      permission: switch (states[_nativePermission(
+                        permission,
+                      )]) {
+                        PermissionState.granted =>
+                          permission_ui.LevelUpPermissionState.granted,
+                        PermissionState.denied =>
+                          permission_ui.LevelUpPermissionState.denied,
+                        _ => permission_ui.LevelUpPermissionState.unknown,
+                      },
+                  });
+                },
+                openPermission: (permission) =>
+                    _permissionGateway.request(_nativePermission(permission)),
+                openApps: _openManageApps,
+              )
+            : AppPermissionsScreen(
+                gateway: _permissionGateway,
+                openPermissionSettings: openSettings,
+                language: _toDashboardLanguage(_language),
+              ),
       ),
     );
     await _refreshScopeAndBumpToken();
@@ -852,9 +953,12 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
             LevelUpLanguage.kk => 'Рұқсат қажет',
           }, style: const TextStyle(color: LevelUpColors.text, fontSize: 18)),
           content: Text(switch (_language) {
-            LevelUpLanguage.en => 'To shield selected apps, LevelUp needs the Accessibility Service permission. Please enable it in Android Settings.',
-            LevelUpLanguage.ru => 'Для защиты приложений LevelUp требуется разрешение Специальных возможностей. Пожалуйста, включи его в настройках.',
-            LevelUpLanguage.kk => 'Қолданбаларды қорғау үшін LevelUp-ке Арнайы мүмкіндіктер рұқсаты қажет. Оны баптаулардан қосыңыз.',
+            LevelUpLanguage.en =>
+              'To shield selected apps, LevelUp needs the Accessibility Service permission. Please enable it in Android Settings.',
+            LevelUpLanguage.ru =>
+              'Для защиты приложений LevelUp требуется разрешение Специальных возможностей. Пожалуйста, включи его в настройках.',
+            LevelUpLanguage.kk =>
+              'Қолданбаларды қорғау үшін LevelUp-ке Арнайы мүмкіндіктер рұқсаты қажет. Оны баптаулардан қосыңыз.',
           }, style: const TextStyle(color: LevelUpColors.muted, fontSize: 14)),
           actions: [
             TextButton(
@@ -924,9 +1028,12 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
                 Padding(
                   padding: const EdgeInsets.fromLTRB(24, 0, 24, 10),
                   child: Text(switch (_language) {
-                    LevelUpLanguage.en => 'Focus stays on until you turn it off. Completing a challenge grants 5 minutes of access.',
-                    LevelUpLanguage.ru => 'Фокус действует до ручного отключения. За выполненное задание открывается 5 минут доступа.',
-                    LevelUpLanguage.kk => 'Фокус қолмен өшірілгенше қосулы болады. Тапсырма орындалса, 5 минутқа рұқсат беріледі.',
+                    LevelUpLanguage.en =>
+                      'Focus stays on until you turn it off. Completing a challenge grants 5 minutes of access.',
+                    LevelUpLanguage.ru =>
+                      'Фокус действует до ручного отключения. За выполненное задание открывается 5 минут доступа.',
+                    LevelUpLanguage.kk =>
+                      'Фокус қолмен өшірілгенше қосулы болады. Тапсырма орындалса, 5 минутқа рұқсат беріледі.',
                   }),
                 ),
                 for (final app in eligible)
@@ -942,7 +1049,11 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
     if (!mounted || target == null) return;
 
     try {
+      final state = _scope?.focusService.currentState;
+      final wasActive =
+          state?.isUserEnabled == true && state?.isAccessibilityGranted == true;
       await _focusGateway.enable(target: target);
+      if (!wasActive) _postFocusNotification(enabled: true);
       if (mounted) {
         setState(() {});
       }
@@ -960,7 +1071,27 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
     }
   }
 
-  Future<void> _handlePauseFocus() => _focusGateway.disable();
+  Future<void> _handlePauseFocus() async {
+    final state = _scope?.focusService.currentState;
+    final wasActive =
+        state?.isUserEnabled == true && state?.isAccessibilityGranted == true;
+    await _focusGateway.disable();
+    if (wasActive) _postFocusNotification(enabled: false);
+  }
+
+  void _postFocusNotification({required bool enabled}) {
+    if (_scope == null) return;
+    unawaited(
+      const MethodChannel('levelup/focus_notifications')
+          .invokeMethod<void>('postManualChange', {
+            'enabled': enabled,
+            'language': _language.name,
+          })
+          .catchError((Object error) {
+            debugPrint('Focus notification was not delivered: $error');
+          }),
+    );
+  }
 
   @override
   void dispose() {
@@ -1052,6 +1183,17 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
         }
         if (_onboardingCompleted) {
           return _buildHomeScreen();
+        }
+        if (_scope != null) {
+          return LevelUpWelcomePolishedScreen(
+            language: _language.name,
+            onLanguageChanged: (name) {
+              final language = LevelUpLanguage.values.byName(name);
+              _saveWelcomeLanguage(language);
+              setState(() => _language = language);
+            },
+            onContinue: () => _openAppSelection(_language),
+          );
         }
         return LevelUpWelcomeScreen(
           initialLanguage: _language,

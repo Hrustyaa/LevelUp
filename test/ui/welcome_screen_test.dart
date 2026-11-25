@@ -27,8 +27,9 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         builder: (context, child) => MediaQuery(
-          data: MediaQuery.of(context)
-              .copyWith(padding: const EdgeInsets.only(top: 24, bottom: 24)),
+          data: MediaQuery.of(
+            context,
+          ).copyWith(padding: const EdgeInsets.only(top: 24, bottom: 24)),
           child: child!,
         ),
         home: LevelUpWelcomeScreen(

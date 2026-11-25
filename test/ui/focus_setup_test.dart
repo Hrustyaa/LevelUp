@@ -36,8 +36,9 @@ void main() {
       isFalse,
     );
     expect(
-      const FocusCapabilities(configurableAccess: true)
-          .supports(d.copyWith(unlockMinutes: 10)),
+      const FocusCapabilities(
+        configurableAccess: true,
+      ).supports(d.copyWith(unlockMinutes: 10)),
       isTrue,
     );
     expect(

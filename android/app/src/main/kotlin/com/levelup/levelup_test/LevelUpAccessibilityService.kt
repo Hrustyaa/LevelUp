@@ -12,15 +12,11 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
-import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
-import android.widget.Button
-import android.widget.ScrollView
-import android.widget.TextView
 import java.util.Locale
 
 /**
@@ -42,12 +38,6 @@ class LevelUpAccessibilityService : AccessibilityService() {
         private const val POLL_INTERVAL_MS = 1000L
         private const val NAVIGATION_GRACE_MS = 1800L
         private const val DEFAULT_TARGET = "com.google.android.youtube"
-
-        private val TARGET_DISPLAY_NAMES = mapOf(
-            "com.google.android.youtube" to "YouTube",
-            "com.instagram.android" to "Instagram",
-            "com.zhiliaoapp.musically" to "TikTok",
-        )
 
         @Volatile
         var instance: LevelUpAccessibilityService? = null
@@ -196,106 +186,35 @@ class LevelUpAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun createGateView(target: String): View {
-        val root = LayoutInflater.from(this).inflate(R.layout.view_levelup_gate, null)
-        val scrollView = root.findViewById<ScrollView>(R.id.gate_scroll)
-        applySystemInsets(scrollView)
+    private fun createGateView(target: String): View = LevelUpGateV2View.create(
+        context = this,
+        targetPackageName = target,
+        language = resolveLanguage(),
+        repetitions = 5,
+        accessMinutes = 5,
+        onExit = { if (gatedPackage == target) exitGate() },
+        onStart = { if (gatedPackage == target) launchClaimedChallenge(target) },
+    )
 
-        val lang = resolveLanguage()
-        val appName = resolveTargetDisplayName(target)
-
-        root.findViewById<TextView>(R.id.gate_focus_label).text = tr(
-            lang,
-            en = "FOCUS MODE",
-            ru = "РЕЖИМ ФОКУСА",
-            kk = "ФОКУС РЕЖИМІ",
-        )
-        root.findViewById<TextView>(R.id.gate_headline).text = tr(
-            lang,
-            en = "Stay focused.",
-            ru = "Сохраняй фокус.",
-            kk = "Назарды сақта.",
-        )
-        root.findViewById<TextView>(R.id.gate_target_app).text = appName
-        root.findViewById<TextView>(R.id.gate_challenge_title).text = tr(
-            lang,
-            en = "Exercise Challenge · 5 reps",
-            ru = "Упражнение · 5 повторений",
-            kk = "Жаттығу · 5 рет",
-        )
-        root.findViewById<TextView>(R.id.gate_challenge_subtitle).text = tr(
-            lang,
-            en = "Earn 5 minutes of access by completing 5 verified reps.",
-            ru = "Выполни 5 повторений с проверкой, чтобы получить 5 минут доступа.",
-            kk = "5 минут рұқсат алу үшін жаттығуды 5 рет орындаңыз.",
-        )
-
-        root.findViewById<Button>(R.id.gate_start_button).apply {
-            text = tr(
-                lang,
-                en = "Start Challenge",
-                ru = "Начать задание",
-                kk = "Тапсырманы бастау",
-            )
-            setOnClickListener {
-                prefs.edit().putString("open_challenge_target", target).apply()
-                beginNavigationAwayFromGate()
-                try {
-                    startActivity(
-                        Intent(this@LevelUpAccessibilityService, MainActivity::class.java).apply {
-                            addFlags(
-                                Intent.FLAG_ACTIVITY_NEW_TASK or
-                                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                                    Intent.FLAG_ACTIVITY_CLEAR_TOP
-                            )
-                        }
-                    )
-                } catch (e: Exception) {
-                    Log.e(TAG, "Cannot launch challenge", e)
-                    prefs.edit().remove("open_challenge_target").apply()
-                    performGlobalAction(GLOBAL_ACTION_HOME)
-                }
-            }
-        }
-
-        root.findViewById<Button>(R.id.gate_back_button).apply {
-            text = tr(
-                lang,
-                en = "Go Back",
-                ru = "Назад",
-                kk = "Артқа",
-            )
-            setOnClickListener {
-                beginNavigationAwayFromGate()
-                performGlobalAction(GLOBAL_ACTION_HOME)
-            }
-        }
-
-        return root
+    private fun exitGate() {
+        beginNavigationAwayFromGate()
+        performGlobalAction(GLOBAL_ACTION_HOME)
     }
 
-    private fun applySystemInsets(scrollView: ScrollView) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            scrollView.setOnApplyWindowInsetsListener { v, insets ->
-                val bars = insets.getInsets(
-                    WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
-                )
-                v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-                insets
-            }
-        } else {
-            @Suppress("DEPRECATION")
-            scrollView.setOnApplyWindowInsetsListener { v, insets ->
-                v.setPadding(
-                    insets.systemWindowInsetLeft,
-                    insets.systemWindowInsetTop,
-                    insets.systemWindowInsetRight,
-                    insets.systemWindowInsetBottom,
-                )
-                insets
-            }
+    private fun launchClaimedChallenge(target: String) {
+        prefs.edit().putString("open_challenge_target", target).apply()
+        beginNavigationAwayFromGate()
+        try {
+            startActivity(Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            })
+        } catch (e: Exception) {
+            Log.e(TAG, "Cannot launch challenge", e)
+            prefs.edit().remove("open_challenge_target").apply()
+            performGlobalAction(GLOBAL_ACTION_HOME)
         }
-        scrollView.requestApplyInsets()
     }
 
     private fun resolveLanguage(): String {
@@ -306,22 +225,6 @@ class LevelUpAccessibilityService : AccessibilityService() {
             "kk" -> "kk"
             else -> "en"
         }
-    }
-
-    private fun resolveTargetDisplayName(target: String): String {
-        TARGET_DISPLAY_NAMES[target]?.let { return it }
-        return try {
-            val appInfo = packageManager.getApplicationInfo(target, 0)
-            packageManager.getApplicationLabel(appInfo).toString()
-        } catch (_: Exception) {
-            "App"
-        }
-    }
-
-    private fun tr(lang: String, en: String, ru: String, kk: String): String = when (lang) {
-        "ru" -> ru
-        "kk" -> kk
-        else -> en
     }
 
     private fun beginNavigationAwayFromGate() {

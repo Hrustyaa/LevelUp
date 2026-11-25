@@ -20,7 +20,7 @@ import 'package:levelup_test/features/settings/application/settings_service.dart
 import 'package:levelup_test/features/settings/data/settings_repository.dart';
 import 'package:levelup_test/features/settings/models/camera_permission_status.dart';
 import 'package:levelup_test/focus_experience/focus_exercises.dart';
-import 'package:levelup_test/focus_experience/focus_screens.dart';
+import 'package:levelup_test/focus_v2/focus_v2_screens.dart';
 import 'package:levelup_test/main_ui.dart';
 import 'package:levelup_test/models/access_attempt_record.dart';
 import 'package:levelup_test/models/access_attempt_state.dart';
@@ -879,7 +879,7 @@ void main() {
       expect(second.isUnlockConfirmed, isFalse);
     });
 
-    testWidgets('8. FocusAccessGrantedScreen renders only after confirmed native grant, never on failed grant', (tester) async {
+    testWidgets('8. FocusV2SuccessScreen renders only after confirmed native grant, never on failed grant', (tester) async {
       List<Pose> currentPoses = [];
       rejectNextGrant = true;
 
@@ -916,8 +916,8 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
       await tester.pump();
 
-      // Failed native grant must NOT show FocusAccessGrantedScreen
-      expect(find.byType(FocusAccessGrantedScreen), findsNothing);
+      // Failed native grant must NOT show FocusV2SuccessScreen
+      expect(find.byType(FocusV2SuccessScreen), findsNothing);
       expect(
         scope.coordinator.currentState.accessGrantStatus,
         AccessGrantStatus.failed,
@@ -927,7 +927,7 @@ void main() {
       controller.dispose();
     });
 
-    testWidgets('9. FocusAccessGrantedScreen renders on confirmed 5-min native grant', (tester) async {
+    testWidgets('9. FocusV2SuccessScreen renders on confirmed 5-min native grant', (tester) async {
       List<Pose> currentPoses = [];
       rejectNextGrant = false;
 
@@ -964,8 +964,8 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
       await tester.pump();
 
-      expect(find.byType(FocusAccessGrantedScreen), findsOneWidget);
-      expect(find.textContaining('5 min of access granted'), findsOneWidget);
+      expect(find.byType(FocusV2SuccessScreen), findsOneWidget);
+      expect(find.textContaining('Available for 5 min'), findsOneWidget);
       expect(grantCount, 1);
 
       controller.dispose();

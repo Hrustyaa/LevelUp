@@ -888,7 +888,8 @@ const _strings = {
     sessionLength: 'Session length',
     accessTitle: 'Temporary access',
     accessHint: 'How long should an app stay unlocked?',
-    fixedAccessHint: 'A verified challenge grants 5 minutes. Other durations are saved as a draft.',
+    fixedAccessHint:
+        'A verified challenge grants 5 minutes. Other durations are saved as a draft.',
     days: 'Days and time',
     weekdays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
     start: 'Start time',
@@ -896,7 +897,8 @@ const _strings = {
     sameDay: 'The schedule starts and ends on the same day.',
     invalidSchedule: 'Choose at least one day and an end time after the start.',
     safety: 'Pause or disable Focus anytime. Exercise is optional.',
-    notSupported: 'These settings can be saved as a draft. Some are not supported by the current Focus engine yet.',
+    notSupported:
+        'These settings can be saved as a draft. Some are not supported by the current Focus engine yet.',
     next: 'Continue',
     skip: 'Skip for now',
     back: 'Back',
@@ -923,7 +925,8 @@ const _strings = {
     sessionLength: 'Длительность сеанса',
     accessTitle: 'Временный доступ',
     accessHint: 'На сколько открывать приложение?',
-    fixedAccessHint: 'За выполненное задание открывается 5 минут доступа. Другие варианты сохраняются в черновике.',
+    fixedAccessHint:
+        'За выполненное задание открывается 5 минут доступа. Другие варианты сохраняются в черновике.',
     days: 'Дни и время',
     weekdays: ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'],
     start: 'Начало',
@@ -931,7 +934,8 @@ const _strings = {
     sameDay: 'Начало и конец — в пределах одного дня.',
     invalidSchedule: 'Выбери хотя бы один день и время окончания после начала.',
     safety: 'Фокус можно приостановить или отключить. Упражнения добровольны.',
-    notSupported: 'Настройки можно сохранить как черновик. Часть из них пока не поддерживается ядром Focus.',
+    notSupported:
+        'Настройки можно сохранить как черновик. Часть из них пока не поддерживается ядром Focus.',
     next: 'Продолжить',
     skip: 'Пока пропустить',
     back: 'Назад',
@@ -958,15 +962,19 @@ const _strings = {
     sessionLength: 'Сеанс ұзақтығы',
     accessTitle: 'Уақытша қолжетімділік',
     accessHint: 'Қолданба қанша уақыт ашық болсын?',
-    fixedAccessHint: 'Расталған тапсырма 5 минутқа рұқсат береді. Басқа нұсқалар жобаға сақталады.',
+    fixedAccessHint:
+        'Расталған тапсырма 5 минутқа рұқсат береді. Басқа нұсқалар жобаға сақталады.',
     days: 'Күндер мен уақыт',
     weekdays: ['Дс', 'Сс', 'Ср', 'Бс', 'Жм', 'Сб', 'Жс'],
     start: 'Басталу уақыты',
     end: 'Аяқталу уақыты',
     sameDay: 'Басталу және аяқталу уақыты бір күн ішінде болуы керек.',
-    invalidSchedule: 'Кемінде бір күнді таңда. Аяқталу уақыты басталу уақытынан кейін болуы керек.',
-    safety: 'Фокусты кез келген уақытта тоқтатуға немесе өшіруге болады. Жаттығу міндетті емес.',
-    notSupported: 'Баптауларды жоба ретінде сақтауға болады. Кейбірін фокус жүйесі әлі қолдамайды.',
+    invalidSchedule:
+        'Кемінде бір күнді таңда. Аяқталу уақыты басталу уақытынан кейін болуы керек.',
+    safety:
+        'Фокусты кез келген уақытта тоқтатуға немесе өшіруге болады. Жаттығу міндетті емес.',
+    notSupported:
+        'Баптауларды жоба ретінде сақтауға болады. Кейбірін фокус жүйесі әлі қолдамайды.',
     next: 'Жалғастыру',
     skip: 'Әзірге өткізіп жіберу',
     back: 'Артқа',

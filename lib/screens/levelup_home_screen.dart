@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart' show listEquals, mapEquals, setEquals;
 import 'package:material_ui/material_ui.dart';
 
 import '../data/dashboard_data.dart';
+import '../data/levelup_permissions.dart';
+import '../ui_polish/levelup_setup_checklist.dart';
 import '../features/achievements/data/achievement_catalog.dart';
 import '../features/achievements/models/achievement_category.dart';
 import '../features/achievements/models/achievement_progress.dart';
@@ -12,6 +14,11 @@ import '../features/achievements/models/achievement_state.dart';
 import '../features/progress/models/progress_state.dart';
 import '../features/statistics/models/daily_activity_stats.dart';
 import '../features/statistics/models/statistics_snapshot.dart';
+import '../focus_rules/focus_rules_panel.dart';
+import '../free_workout/workout_challenge_tab.dart';
+import '../progress/progress_tab.dart';
+import '../settings/settings_tab.dart';
+import '../progress/progress_repository.dart';
 import 'levelup_focus_setup_screen.dart';
 
 const _bg = Color(0xFF0A0F10),
@@ -39,6 +46,8 @@ class LevelUpHomeScreen extends StatefulWidget {
     this.onExerciseSettings,
     this.onEnableFocus,
     this.onPauseFocus,
+    this.onDisableFocus,
+    this.onLoadSetupPermissions,
     this.onMovement,
     this.onPermissions,
     this.onNotifications,
@@ -46,6 +55,7 @@ class LevelUpHomeScreen extends StatefulWidget {
     this.onBreakCompleted,
     this.refreshToken = 0,
     this.progressStream,
+    this.progressRepository = const LocalProgressRepository(),
     this.statisticsStream,
     this.achievementStream,
     this.soundFeedbackEnabled,
@@ -68,13 +78,17 @@ class LevelUpHomeScreen extends StatefulWidget {
       onExerciseSettings,
       onEnableFocus,
       onPauseFocus,
+      onDisableFocus,
       onMovement,
       onPermissions,
       onNotifications;
+  final Future<Map<LevelUpPermission, PermissionState>> Function()?
+  onLoadSetupPermissions;
   final ValueChanged<DashboardLanguage>? onLanguageChanged;
   final ValueChanged<DateTime>? onBreakCompleted;
   final int refreshToken;
   final Stream<ProgressState>? progressStream;
+  final ProgressRepository progressRepository;
   final Stream<StatisticsSnapshot>? statisticsStream;
   final Stream<AchievementState>? achievementStream;
   final bool? soundFeedbackEnabled, diagnosticLoggingEnabled;
@@ -90,6 +104,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
   late DashboardLanguage _language = widget.language;
   late FocusSetupDraft? _currentDraft = widget.focusDraft;
   FocusSnapshot? _focus;
+  Map<LevelUpPermission, PermissionState> _setupPermissions = const {};
   final _insightState = ValueNotifier(const DashboardInsights());
   DashboardInsights get _insights => _insightState.value;
   bool _loading = true,
@@ -113,6 +128,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
   int _seconds = 0;
   bool _foreground = true;
   final _scrolls = {for (final t in DashboardTab.values) t: ScrollController()};
+  final _progressKey = GlobalKey<LevelUpProgressTabState>();
 
   String tr(String en, String ru, String kk) => switch (_language) {
     DashboardLanguage.en => en,
@@ -301,9 +317,11 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     }
 
     _pendingReads.add(cancel);
-    unawaited(Future<T>.sync(read).then<void>((value) {
-      if (!result.isCompleted) result.complete(value);
-    }, onError: fail));
+    unawaited(
+      Future<T>.sync(read).then<void>((value) {
+        if (!result.isCompleted) result.complete(value);
+      }, onError: fail),
+    );
     return result.future.whenComplete(() {
       timer.cancel();
       _pendingReads.remove(cancel);
@@ -320,9 +338,20 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     var insights = quiet ? _insights : const DashboardInsights();
     var focusError = false;
     var insightsError = quiet && _insightsError;
+    var setupPermissions = _setupPermissions;
     // Independent reads: a failed stats provider does not mask the engine status.
     try {
       await Future.wait<void>([
+        if (!quiet && widget.onLoadSetupPermissions != null)
+          () async {
+            try {
+              setupPermissions = await _readWithTimeout(
+                widget.onLoadSetupPermissions!,
+              );
+            } catch (_) {
+              setupPermissions = const {};
+            }
+          }(),
         () async {
           try {
             next = await _readWithTimeout(widget.gateway.read);
@@ -340,8 +369,11 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
           }
         }(),
       ]);
-      if (mounted && generation == _generation &&
-          !quiet && widget.loadInsights != null && !insightsError) {
+      if (mounted &&
+          generation == _generation &&
+          !quiet &&
+          widget.loadInsights != null &&
+          !insightsError) {
         _lastProgressSignature = _signatureFromInsights(insights);
         if (insights.statistics != null) {
           _lastStatisticsSignature = _signatureFromStatistics(
@@ -368,6 +400,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     }
     setState(() {
       _focus = next;
+      _setupPermissions = setupPermissions;
       _insightState.value = insights;
       _focusError = focusError;
       _insightsError = insightsError;
@@ -514,7 +547,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
                   child: RefreshIndicator(
                     color: _lime,
                     backgroundColor: _surface,
-                    onRefresh: _refresh,
+                    onRefresh: _refreshVisibleTab,
                     child: ListView(
                       key: PageStorageKey(_tab),
                       controller: _scrolls[_tab],
@@ -1017,7 +1050,11 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
             _metric(
               Icons.smartphone_rounded,
               _minutes(_insights.todayUsageMinutes),
-              tr('Selected apps usage', 'Время в приложениях', 'Қолданба уақыты'),
+              tr(
+                'Selected apps usage',
+                'Время в приложениях',
+                'Қолданба уақыты',
+              ),
             ),
           _metric(
             Icons.lock_open_rounded,
@@ -1066,6 +1103,75 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       onTap: _openActivity,
     ),
     _eventsCard(limit: 3),
+    if (widget.onLoadSetupPermissions != null) ...[
+      _gap(),
+      _section(tr('Setup', 'Настройка', 'Баптау')),
+      _card(
+        LevelUpSetupChecklist(
+          language: _language.name,
+          items: [
+            LevelUpSetupItem(
+              title: tr(
+                'Protected app',
+                'Защищённое приложение',
+                'Қорғалған қолданба',
+              ),
+              description: tr(
+                'Choose which app Focus protects.',
+                'Выбери приложение для фокуса.',
+                'Фокус қорғайтын қолданбаны таңдаңыз.',
+              ),
+              icon: Icons.apps_outlined,
+              status: _draftApps.isEmpty
+                  ? LevelUpSetupStatus.attention
+                  : LevelUpSetupStatus.ready,
+              onTap: widget.onEditFocus == null
+                  ? null
+                  : () => _action(widget.onEditFocus!),
+            ),
+            _setupItem(
+              LevelUpPermission.accessibility,
+              Icons.accessibility_new_rounded,
+              tr(
+                'Accessibility',
+                'Специальные возможности',
+                'Арнайы мүмкіндіктер',
+              ),
+              tr(
+                'Required to show the Focus Gate.',
+                'Нужно для отображения экрана фокуса.',
+                'Фокус экранын көрсету үшін қажет.',
+              ),
+            ),
+            _setupItem(
+              LevelUpPermission.camera,
+              Icons.camera_alt_outlined,
+              tr('Camera', 'Камера', 'Камера'),
+              tr(
+                'Verifies workout repetitions.',
+                'Проверяет повторения.',
+                'Қайталауларды тексереді.',
+              ),
+            ),
+            _setupItem(
+              LevelUpPermission.usage,
+              Icons.timer_outlined,
+              tr(
+                'Usage access',
+                'Доступ к статистике',
+                'Қолдану деректеріне кіру',
+              ),
+              tr(
+                'Shows real screen time for selected apps.',
+                'Показывает время в выбранных приложениях.',
+                'Таңдалған қолданбалардың экран уақытын көрсетеді.',
+              ),
+              optional: true,
+            ),
+          ],
+        ),
+      ),
+    ],
     if (_insightsError)
       _note(
         tr(
@@ -1161,6 +1267,30 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       ),
       onTap: onTap,
       key: onTap == null ? null : const ValueKey('home_level'),
+    );
+  }
+
+  LevelUpSetupItem _setupItem(
+    LevelUpPermission permission,
+    IconData icon,
+    String title,
+    String description, {
+    bool optional = false,
+  }) {
+    final status = switch (_setupPermissions[permission]) {
+      PermissionState.granted => LevelUpSetupStatus.ready,
+      _ when optional => LevelUpSetupStatus.optional,
+      PermissionState.denied => LevelUpSetupStatus.attention,
+      _ => LevelUpSetupStatus.unknown,
+    };
+    return LevelUpSetupItem(
+      title: title,
+      description: description,
+      icon: icon,
+      status: status,
+      onTap: widget.onPermissions == null
+          ? null
+          : () => _action(widget.onPermissions!),
     );
   }
 
@@ -1271,7 +1401,11 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
               ],
               _primary(
                 tr('Turn off Focus', 'Отключить фокус', 'Фокусты өшіру'),
-                _busy ? null : () => _action(widget.gateway.disable),
+                _busy
+                    ? null
+                    : () => _action(
+                        widget.onDisableFocus ?? widget.gateway.disable,
+                      ),
                 key: const ValueKey('focus_off'),
               ),
             ] else
@@ -1349,103 +1483,136 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
         ),
       ),
       _gap(),
-      _section(tr('Focus rules', 'Правила фокуса', 'Фокус ережелері')),
-      _card(
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (widget.onExerciseSettings != null) ...[
-              _ruleTile(
-                title: tr('Exercises', 'Упражнения', 'Жаттығулар'),
-                subtitle: tr(
-                  'Movement before access',
-                  'Движение перед доступом',
-                  'Рұқсат алдындағы қозғалыс',
+      if (widget.onLoadSetupPermissions != null) ...[
+        LevelUpFocusRulesPanel(
+          draft: draft,
+          language: _language,
+          capabilities: widget.capabilities,
+          focusActive: _focus?.active,
+          onAccessOptions: _showAccessOptionsSheet,
+          onSaveDraft: widget.onSaveFocusDraft == null
+              ? null
+              : (next) async {
+                  await widget.onSaveFocusDraft!(next);
+                  if (mounted) setState(() => _currentDraft = next);
+                },
+          busy: _busy,
+        ),
+        if (widget.onExerciseSettings != null) ...[
+          _gap(10),
+          _card(
+            _ruleTile(
+              title: tr('Exercises', 'Упражнения', 'Жаттығулар'),
+              subtitle: tr(
+                'Squats and push-ups',
+                'Приседания и отжимания',
+                'Отырып-тұру және қолды бүгіп-жазу',
+              ),
+              icon: Icons.directions_walk_rounded,
+              key: const ValueKey('focus_exercise_settings'),
+              onTap: () => _action(widget.onExerciseSettings!),
+            ),
+          ),
+        ],
+      ] else ...[
+        _section(tr('Focus rules', 'Правила фокуса', 'Фокус ережелері')),
+        _card(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (widget.onExerciseSettings != null) ...[
+                _ruleTile(
+                  title: tr('Exercises', 'Упражнения', 'Жаттығулар'),
+                  subtitle: tr(
+                    'Movement before access',
+                    'Движение перед доступом',
+                    'Рұқсат алдындағы қозғалыс',
+                  ),
+                  icon: Icons.directions_walk_rounded,
+                  key: const ValueKey('focus_exercise_settings'),
+                  onTap: () => _action(widget.onExerciseSettings!),
                 ),
-                icon: Icons.directions_walk_rounded,
-                key: const ValueKey('focus_exercise_settings'),
-                onTap: () => _action(widget.onExerciseSettings!),
+                const Divider(color: _border, height: 16),
+              ],
+              _ruleTile(
+                title: tr('Focus mode', 'Режим фокуса', 'Фокус режимі'),
+                subtitle:
+                    draft.mode == FocusMode.alwaysOn ||
+                        (draft.mode == FocusMode.timedSession &&
+                            widget.capabilities.timedSession) ||
+                        (draft.mode == FocusMode.customSchedule &&
+                            widget.capabilities.customSchedule)
+                    ? modeLabel
+                    : '$modeLabel · ${tr('Draft', 'Черновик', 'Жоба')}',
+                icon: Icons.tune_rounded,
+                key: const ValueKey('rule_mode_tile'),
+                onTap: () => _showModeSheet(draft),
               ),
               const Divider(color: _border, height: 16),
-            ],
-            _ruleTile(
-              title: tr('Focus mode', 'Режим фокуса', 'Фокус режимі'),
-              subtitle:
-                  draft.mode == FocusMode.alwaysOn ||
-                      (draft.mode == FocusMode.timedSession &&
-                          widget.capabilities.timedSession) ||
-                      (draft.mode == FocusMode.customSchedule &&
-                          widget.capabilities.customSchedule)
-                  ? modeLabel
-                  : '$modeLabel · ${tr('Draft', 'Черновик', 'Жоба')}',
-              icon: Icons.tune_rounded,
-              key: const ValueKey('rule_mode_tile'),
-              onTap: () => _showModeSheet(draft),
-            ),
-            const Divider(color: _border, height: 16),
-            if (draft.mode == FocusMode.timedSession) ...[
+              if (draft.mode == FocusMode.timedSession) ...[
+                _ruleTile(
+                  title: tr(
+                    'Session duration',
+                    'Длительность сессии',
+                    'Сессия ұзақтығы',
+                  ),
+                  subtitle: durationLabel,
+                  icon: Icons.hourglass_bottom_rounded,
+                  key: const ValueKey('rule_duration_tile'),
+                  onTap: () => _showSessionDurationSheet(draft),
+                ),
+                const Divider(color: _border, height: 16),
+              ],
+              if (draft.mode == FocusMode.customSchedule) ...[
+                _ruleTile(
+                  title: tr('Custom schedule', 'Расписание', 'Кесте'),
+                  subtitle: scheduleLabel,
+                  icon: Icons.calendar_today_rounded,
+                  key: const ValueKey('rule_schedule_tile'),
+                  onTap: () => _showScheduleSheet(draft),
+                ),
+                const Divider(color: _border, height: 16),
+              ],
               _ruleTile(
                 title: tr(
-                  'Session duration',
-                  'Длительность сессии',
-                  'Сессия ұзақтығы',
+                  'Temporary access',
+                  'Временный доступ',
+                  'Уақытша қолжетімділік',
                 ),
-                subtitle: durationLabel,
-                icon: Icons.hourglass_bottom_rounded,
-                key: const ValueKey('rule_duration_tile'),
-                onTap: () => _showSessionDurationSheet(draft),
+                subtitle:
+                    widget.capabilities.configurableAccess ||
+                        draft.unlockMinutes ==
+                            FocusCapabilities.defaultAccessMinutes
+                    ? accessLabel
+                    : tr(
+                        '5 min active · $accessLabel draft',
+                        'Действует 5 мин · $accessLabel в черновике',
+                        'Қазір 5 мин · жоба $accessLabel',
+                      ),
+                icon: Icons.timer_outlined,
+                key: const ValueKey('rule_access_tile'),
+                onTap: () => _showAccessDurationSheet(draft),
               ),
               const Divider(color: _border, height: 16),
-            ],
-            if (draft.mode == FocusMode.customSchedule) ...[
               _ruleTile(
-                title: tr('Custom schedule', 'Расписание', 'Кесте'),
-                subtitle: scheduleLabel,
-                icon: Icons.calendar_today_rounded,
-                key: const ValueKey('rule_schedule_tile'),
-                onTap: () => _showScheduleSheet(draft),
+                title: tr(
+                  'Access options',
+                  'Параметры разблокировки',
+                  'Бұғаттан шығару баптаулары',
+                ),
+                subtitle: tr(
+                  'Exercise or voluntary exit',
+                  'Упражнение или добровольный выход',
+                  'Жаттығу немесе ерікті шығу',
+                ),
+                icon: Icons.fitness_center_rounded,
+                key: const ValueKey('rule_options_tile'),
+                onTap: () => _showAccessOptionsSheet(),
               ),
-              const Divider(color: _border, height: 16),
             ],
-            _ruleTile(
-              title: tr(
-                'Temporary access',
-                'Временный доступ',
-                'Уақытша қолжетімділік',
-              ),
-              subtitle:
-                  widget.capabilities.configurableAccess ||
-                      draft.unlockMinutes ==
-                          FocusCapabilities.defaultAccessMinutes
-                  ? accessLabel
-                  : tr(
-                      '5 min active · $accessLabel draft',
-                      'Действует 5 мин · $accessLabel в черновике',
-                      'Қазір 5 мин · жоба $accessLabel',
-                    ),
-              icon: Icons.timer_outlined,
-              key: const ValueKey('rule_access_tile'),
-              onTap: () => _showAccessDurationSheet(draft),
-            ),
-            const Divider(color: _border, height: 16),
-            _ruleTile(
-              title: tr(
-                'Access options',
-                'Параметры разблокировки',
-                'Бұғаттан шығару баптаулары',
-              ),
-              subtitle: tr(
-                'Exercise or voluntary exit',
-                'Упражнение или добровольный выход',
-                'Жаттығу немесе ерікті шығу',
-              ),
-              icon: Icons.fitness_center_rounded,
-              key: const ValueKey('rule_options_tile'),
-              onTap: () => _showAccessOptionsSheet(),
-            ),
-          ],
+          ),
         ),
-      ),
+      ],
       _gap(),
       if (widget.onEnableFocus == null)
         _note(
@@ -2415,7 +2582,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
                         const SizedBox(width: 10),
                         Text(
                           tr(
-                            'Manual unlock / turn off',
+                            'Turn off Focus',
                             'Ручное отключение',
                             'Қолмен өшіру',
                           ),
@@ -2538,40 +2705,11 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       ),
     ),
     _gap(),
-    _card(
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.directions_walk_rounded, color: _muted, size: 26),
-          _gap(8),
-          _title(tr('Workout', 'Тренировка', 'Жаттығу')),
-          _gap(5),
-          _sub(
-            widget.onMovement == null
-                ? tr(
-                    'Open your selected app with Focus on to start the movement challenge.',
-                    'Чтобы начать упражнение, открой выбранное приложение при включённом фокусе.',
-                    'Жаттығуды бастау үшін фокус қосулы кезде таңдалған қолданбаны ашыңыз.',
-                  )
-                : tr(
-                    'Optional workout. Stop whenever you want.',
-                    'Добровольная тренировка. Можно остановиться в любой момент.',
-                    'Ерікті жаттығу. Кез келген уақытта тоқтатуға болады.',
-                  ),
-          ),
-          if (widget.onMovement != null) ...[
-            _gap(12),
-            _primary(
-              tr(
-                'Open workout',
-                'Открыть тренировку',
-                'Жаттығуды ашу',
-              ),
-              _busy ? null : () => _action(widget.onMovement!),
-            ),
-          ],
-        ],
-      ),
+    WorkoutChallengeTab(
+      language: _language.name,
+      onOpenWorkout: widget.onMovement == null || _busy
+          ? null
+          : () => _action(widget.onMovement!),
     ),
     _gap(10),
     _card(
@@ -2616,7 +2754,32 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     await _refresh();
   }
 
+  Future<void> _refreshVisibleTab() async {
+    if (_tab == DashboardTab.progress) {
+      await Future.wait([
+        _refresh(),
+        if (_progressKey.currentState case final state?) state.refresh(),
+      ]);
+    } else {
+      await _refresh();
+    }
+  }
+
   List<Widget> _progress() => [
+    LevelUpProgressTab(
+      key: _progressKey,
+      summary: _progressSummary(),
+      trackedPackageIds: _currentDraft?.packageIds ?? widget.draftIds,
+      language: _language.name,
+      refreshToken: widget.refreshToken,
+      onOpenUnlockHistory: _insights.historyReady
+          ? () => _openActivity(unlocksOnly: true)
+          : null,
+      repository: widget.progressRepository,
+      onOpenUsagePermissions: widget.onPermissions,
+    ),
+  ];
+  List<Widget> _progressSummary() => [
     _title(tr('Your progress', 'Твой прогресс', 'Ілгерілеуің'), 26),
     _gap(),
     if (_insights.todayWorkouts != null || _insights.todayUnlocks != null) ...[
@@ -2642,10 +2805,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       _gap(),
     ],
     _levelCard(onTap: _openLevel),
-    if (_insights.streakInfo != null) ...[
-      _gap(),
-      _streakCard(),
-    ],
+    if (_insights.streakInfo != null) ...[_gap(), _streakCard()],
     if (_insights.statistics != null) ...[
       _gap(),
       _progressStatsSummary(_insights.statistics!),
@@ -2682,6 +2842,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       onTap: _openActivity,
     ),
     _eventsCard(limit: 5),
+    _gap(),
   ];
   Widget _streakCard() {
     final s = _insights.streakInfo!;
@@ -2717,123 +2878,79 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
   }
 
   List<Widget> _settings() => [
-    _title(tr('Preferences', 'Предпочтения', 'Қалаулар'), 26),
-    _gap(),
-    _card(
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _title(tr('Language', 'Язык', 'Тіл'), 16),
-          _gap(10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final l in DashboardLanguage.values)
-                ChoiceChip(
-                  label: Text(switch (l) {
-                    DashboardLanguage.en => 'English',
-                    DashboardLanguage.ru => 'Русский',
-                    DashboardLanguage.kk => 'Қазақша',
-                  }),
-                  selected: l == _language,
-                  showCheckmark: false,
-                  selectedColor: _lime,
-                  labelStyle: TextStyle(color: l == _language ? _bg : _ink),
-                  onSelected: (_) {
-                    setState(() => _language = l);
-                    widget.onLanguageChanged?.call(l);
-                  },
-                ),
-            ],
-          ),
-        ],
-      ),
-    ),
-    _gap(10),
-    _card(
-      Column(
-        children: [
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.shield_outlined, color: _muted),
-            title: Text(tr('Permissions', 'Разрешения', 'Рұқсаттар')),
-            trailing: const Icon(Icons.chevron_right, color: _muted),
-            enabled: widget.onPermissions != null,
-            onTap: widget.onPermissions == null
-                ? null
-                : () => _action(widget.onPermissions!),
-          ),
-          const Divider(height: 1),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.track_changes, color: _muted),
-            title: Text(
-              tr('Focus settings', 'Настройки фокуса', 'Фокус баптаулары'),
+    LevelUpSettingsTab(
+      additionalGeneralSettings: [
+        if (widget.onSoundFeedbackChanged != null ||
+            widget.onDiagnosticLoggingChanged != null) ...[
+          _card(
+            Column(
+              children: [
+                if (widget.onSoundFeedbackChanged != null &&
+                    widget.soundFeedbackEnabled != null)
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: widget.soundFeedbackEnabled!,
+                    activeThumbColor: _lime,
+                    title: Text(
+                      tr(
+                        'Sound & haptic feedback',
+                        'Звук и виброотклик',
+                        'Дыбыс және діріл',
+                      ),
+                    ),
+                    onChanged: _busy
+                        ? null
+                        : (v) =>
+                              _action(() => widget.onSoundFeedbackChanged!(v)),
+                  ),
+                if (widget.onSoundFeedbackChanged != null &&
+                    widget.soundFeedbackEnabled != null &&
+                    widget.onDiagnosticLoggingChanged != null &&
+                    widget.diagnosticLoggingEnabled != null)
+                  const Divider(height: 1),
+                if (widget.onDiagnosticLoggingChanged != null &&
+                    widget.diagnosticLoggingEnabled != null)
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: widget.diagnosticLoggingEnabled!,
+                    activeThumbColor: _lime,
+                    title: Text(
+                      tr(
+                        'Diagnostic logging',
+                        'Журнал диагностики',
+                        'Диагностика журналы',
+                      ),
+                    ),
+                    onChanged: _busy
+                        ? null
+                        : (v) => _action(
+                            () => widget.onDiagnosticLoggingChanged!(v),
+                          ),
+                  ),
+              ],
             ),
-            trailing: const Icon(Icons.chevron_right, color: _muted),
-            onTap: () => _go(DashboardTab.focus),
           ),
+          _gap(10),
         ],
-      ),
-    ),
-    _gap(10),
-    if (widget.onSoundFeedbackChanged != null ||
-        widget.onDiagnosticLoggingChanged != null) ...[
-      _card(
-        Column(
-          children: [
-            if (widget.onSoundFeedbackChanged != null &&
-                widget.soundFeedbackEnabled != null)
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: widget.soundFeedbackEnabled!,
-                activeThumbColor: _lime,
-                title: Text(
-                  tr(
-                    'Sound & haptic feedback',
-                    'Звук и виброотклик',
-                    'Дыбыс және діріл',
-                  ),
-                ),
-                onChanged: _busy
-                    ? null
-                    : (v) => _action(() => widget.onSoundFeedbackChanged!(v)),
-              ),
-            if (widget.onSoundFeedbackChanged != null &&
-                widget.soundFeedbackEnabled != null &&
-                widget.onDiagnosticLoggingChanged != null &&
-                widget.diagnosticLoggingEnabled != null)
-              const Divider(height: 1),
-            if (widget.onDiagnosticLoggingChanged != null &&
-                widget.diagnosticLoggingEnabled != null)
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: widget.diagnosticLoggingEnabled!,
-                activeThumbColor: _lime,
-                title: Text(
-                  tr(
-                    'Diagnostic logging',
-                    'Журнал диагностики',
-                    'Диагностика журналы',
-                  ),
-                ),
-                onChanged: _busy
-                    ? null
-                    : (v) =>
-                          _action(() => widget.onDiagnosticLoggingChanged!(v)),
-              ),
-          ],
-        ),
-      ),
-      _gap(10),
-    ],
-    _note(
-      tr(
-        'Additional settings will appear when their features are connected.',
-        'Дополнительные настройки появятся после подключения функций.',
-        'Қосымша баптаулар функциялар қосылғанда пайда болады.',
-      ),
+      ],
+      language: _language,
+      onExerciseSettings: widget.onExerciseSettings == null
+          ? null
+          : () => _action(widget.onExerciseSettings!),
+      onLanguageChanged: (next) {
+        setState(() => _language = next);
+        widget.onLanguageChanged?.call(next);
+      },
+      onManageApps: widget.onEditFocus == null
+          ? null
+          : () => _action(widget.onEditFocus!),
+      onFocusRules: () => _go(DashboardTab.focus),
+      onOpenPermissions: widget.onPermissions == null
+          ? null
+          : () => _action(widget.onPermissions!),
+      onOpenNotifications: widget.onNotifications == null
+          ? null
+          : () => _action(widget.onNotifications!),
     ),
   ];
   Widget _achievementsErrorCard() => _card(
@@ -2856,18 +2973,36 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
   };
 
   String _achievementTitle(String id) => switch (id) {
-    AchievementCatalog.firstWorkoutId =>
-      tr('First Step', 'Первый шаг', 'Алғашқы қадам'),
-    AchievementCatalog.fiveWorkoutsId =>
-      tr('Getting Stronger', 'Становясь сильнее', 'Күшейе түсу'),
-    AchievementCatalog.twentyFiveSquatsId =>
-      tr('Squat Starter', 'Мастер приседаний', 'Отырып-тұру бастауы'),
-    AchievementCatalog.firstUnlockId =>
-      tr('Focus Breakthrough', 'Прорыв фокуса', 'Фокус серпілісі'),
-    AchievementCatalog.threeDayStreakId =>
-      tr('Consistency', 'Постоянство', 'Тұрақтылық'),
-    AchievementCatalog.reachLevelTwoId =>
-      tr('Level Up', 'Новый уровень', 'Жаңа деңгей'),
+    AchievementCatalog.firstWorkoutId => tr(
+      'First Step',
+      'Первый шаг',
+      'Алғашқы қадам',
+    ),
+    AchievementCatalog.fiveWorkoutsId => tr(
+      'Getting Stronger',
+      'Становясь сильнее',
+      'Күшейе түсу',
+    ),
+    AchievementCatalog.twentyFiveSquatsId => tr(
+      'Squat Starter',
+      'Мастер приседаний',
+      'Отырып-тұру бастауы',
+    ),
+    AchievementCatalog.firstUnlockId => tr(
+      'Focus Breakthrough',
+      'Прорыв фокуса',
+      'Фокус серпілісі',
+    ),
+    AchievementCatalog.threeDayStreakId => tr(
+      'Consistency',
+      'Постоянство',
+      'Тұрақтылық',
+    ),
+    AchievementCatalog.reachLevelTwoId => tr(
+      'Level Up',
+      'Новый уровень',
+      'Жаңа деңгей',
+    ),
     _ => id,
   };
 
@@ -2948,8 +3083,9 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
   Widget _achievementRow(AchievementProgress item) {
     final unlocked = item.isUnlocked;
     final unlockedDate = item.unlockedAt != null
-        ? MaterialLocalizations.of(context)
-            .formatShortDate(item.unlockedAt!.toLocal())
+        ? MaterialLocalizations.of(
+            context,
+          ).formatShortDate(item.unlockedAt!.toLocal())
         : null;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2960,12 +3096,12 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
           decoration: BoxDecoration(
             color: unlocked ? _lime.withValues(alpha: 0.14) : _bg,
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: unlocked ? _lime : _border,
-            ),
+            border: Border.all(color: unlocked ? _lime : _border),
           ),
           child: Icon(
-            unlocked ? Icons.verified_rounded : _achievementIcon(item.definition.category),
+            unlocked
+                ? Icons.verified_rounded
+                : _achievementIcon(item.definition.category),
             color: unlocked ? _lime : _muted,
             size: 18,
           ),
@@ -3069,7 +3205,11 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
               child: _metric(
                 Icons.accessibility_new_rounded,
                 '${stats.workouts.totalVerifiedRepetitions}',
-                tr('Verified squats', 'Засчитано приседаний', 'Есептелген отырулар'),
+                tr(
+                  'Verified squats',
+                  'Засчитано приседаний',
+                  'Есептелген отырулар',
+                ),
               ),
             ),
           ],
@@ -3229,10 +3369,12 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
             _gap(3),
             _sub(
               [
-                MaterialLocalizations.of(context)
-                    .formatShortDate(e.at.toLocal()),
-                MaterialLocalizations.of(context)
-                    .formatTimeOfDay(TimeOfDay.fromDateTime(e.at.toLocal())),
+                MaterialLocalizations.of(
+                  context,
+                ).formatShortDate(e.at.toLocal()),
+                MaterialLocalizations.of(
+                  context,
+                ).formatTimeOfDay(TimeOfDay.fromDateTime(e.at.toLocal())),
                 if (e.detail != null) e.detail!,
                 if (e.minutes != null) _minutes(e.minutes),
               ].join(' · '),
@@ -3252,8 +3394,8 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
         ),
     ],
   );
-  void _openActivity() {
-    var period = 0;
+  void _openActivity({bool unlocksOnly = false}) {
+    var period = unlocksOnly ? 2 : 0;
     Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (context) => ValueListenableBuilder<DashboardInsights>(
@@ -3271,120 +3413,136 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
                   ([...insights.events]..sort((a, b) => b.at.compareTo(a.at)))
                       .where(
                         (e) =>
-                            period == 2 ||
-                            !e.at.toLocal().isBefore(
-                              period == 0 ? today : week,
-                            ),
+                            (!unlocksOnly ||
+                                e.kind == ActivityKind.temporaryAccess) &&
+                            (period == 2 ||
+                                !e.at.toLocal().isBefore(
+                                  period == 0 ? today : week,
+                                )),
                       )
                       .toList();
-              return _detail(tr('Activity', 'Активность', 'Белсенділік'), [
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    for (final (i, label) in [
-                      tr('Today', 'Сегодня', 'Бүгін'),
-                      tr('This week', 'Эта неделя', 'Осы апта'),
-                      tr('All', 'Все', 'Барлығы'),
-                    ].indexed)
-                      ChoiceChip(
-                        label: Text(label),
-                        selected: period == i,
-                        showCheckmark: false,
-                        selectedColor: _lime,
-                        labelStyle: TextStyle(color: period == i ? _bg : _ink),
-                        onSelected: (_) => setLocal(() => period = i),
-                      ),
-                  ],
-                ),
-                _gap(),
-                if (period == 0) ...[
-                  _metric(
-                    Icons.smartphone_rounded,
-                    _minutes(insights.todayUsageMinutes),
-                    tr(
-                      'Today · Selected apps',
-                      'Сегодня · Выбранные приложения',
-                      'Бүгін · Таңдалған қолданбалар',
-                    ),
+              return _detail(
+                unlocksOnly
+                    ? tr(
+                        'Unlock history',
+                        'История разблокировок',
+                        'Бұғаттан шығару тарихы',
+                      )
+                    : tr('Activity', 'Активность', 'Белсенділік'),
+                [
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final (i, label) in [
+                        tr('Today', 'Сегодня', 'Бүгін'),
+                        tr('This week', 'Эта неделя', 'Осы апта'),
+                        tr('All', 'Все', 'Барлығы'),
+                      ].indexed)
+                        ChoiceChip(
+                          label: Text(label),
+                          selected: period == i,
+                          showCheckmark: false,
+                          selectedColor: _lime,
+                          labelStyle: TextStyle(
+                            color: period == i ? _bg : _ink,
+                          ),
+                          onSelected: (_) => setLocal(() => period = i),
+                        ),
+                    ],
                   ),
                   _gap(),
-                  if (insights.usageByApp.isNotEmpty) ...[
-                    _section(
-                      tr('By app', 'По приложениям', 'Қолданбалар бойынша'),
-                    ),
-                    _card(
-                      Column(
-                        children: [
-                          for (final entry in insights.usageByApp.entries) ...[
-                            _appLine(_app(entry.key), _minutes(entry.value)),
-                            _gap(8),
-                          ],
-                        ],
+                  if (period == 0 && !unlocksOnly) ...[
+                    _metric(
+                      Icons.smartphone_rounded,
+                      _minutes(insights.todayUsageMinutes),
+                      tr(
+                        'Today · Selected apps',
+                        'Сегодня · Выбранные приложения',
+                        'Бүгін · Таңдалған қолданбалар',
                       ),
                     ),
                     _gap(),
-                  ],
-                ],
-                _section(tr('History', 'История', 'Тарих')),
-                if (events.isEmpty)
-                  _card(
-                    _sub(
-                      insights.historyReady
-                          ? tr(
-                              'No events for this period.',
-                              'Нет событий за этот период.',
-                              'Бұл кезеңде оқиға жоқ.',
-                            )
-                          : tr(
-                              'History is not connected yet.',
-                              'История пока не подключена.',
-                              'Тарих әзірге қосылмаған.',
-                            ),
-                    ),
-                  )
-                else
-                  _card(
-                    Column(
-                      children: [
-                        for (final (i, e) in events.indexed) ...[
-                          if (i > 0) const Divider(height: 22),
-                          _event(e),
-                        ],
-                      ],
-                    ),
-                  ),
-                _gap(),
-                _section(tr('Last 7 days', 'Последние 7 дней', 'Соңғы 7 күн')),
-                _card(
-                  insights.statistics != null
-                      ? Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                    if (insights.usageByApp.isNotEmpty) ...[
+                      _section(
+                        tr('By app', 'По приложениям', 'Қолданбалар бойынша'),
+                      ),
+                      _card(
+                        Column(
                           children: [
-                            _sub(
-                              tr(
-                                'Weekly workout activity',
-                                'Тренировки за неделю',
-                                'Апталық жаттығу белсенділігі',
-                              ),
-                            ),
-                            _gap(8),
-                            _WorkoutActivityBars(
-                              days: insights.statistics!.weeklyActivity,
-                              language: _language,
-                            ),
+                            for (final entry
+                                in insights.usageByApp.entries) ...[
+                              _appLine(_app(entry.key), _minutes(entry.value)),
+                              _gap(8),
+                            ],
                           ],
-                        )
-                      : insights.week.isEmpty
-                          ? _sub(
-                              tr(
-                                'No screen time data yet.',
-                                'Данных пока нет.',
-                                'Деректер әзірге жоқ.',
+                        ),
+                      ),
+                      _gap(),
+                    ],
+                  ],
+                  _section(tr('History', 'История', 'Тарих')),
+                  if (events.isEmpty)
+                    _card(
+                      _sub(
+                        insights.historyReady
+                            ? tr(
+                                'No events for this period.',
+                                'Нет событий за этот период.',
+                                'Бұл кезеңде оқиға жоқ.',
+                              )
+                            : tr(
+                                'History is not connected yet.',
+                                'История пока не подключена.',
+                                'Тарих әзірге қосылмаған.',
                               ),
-                            )
-                          : _UsageBars(days: insights.week, language: _language),
-                ),
-              ]);
+                      ),
+                    )
+                  else
+                    _card(
+                      Column(
+                        children: [
+                          for (final (i, e) in events.indexed) ...[
+                            if (i > 0) const Divider(height: 22),
+                            _event(e),
+                          ],
+                        ],
+                      ),
+                    ),
+                  _gap(),
+                  _section(
+                    tr('Last 7 days', 'Последние 7 дней', 'Соңғы 7 күн'),
+                  ),
+                  _card(
+                    insights.statistics != null
+                        ? Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _sub(
+                                tr(
+                                  'Weekly workout activity',
+                                  'Тренировки за неделю',
+                                  'Апталық жаттығу белсенділігі',
+                                ),
+                              ),
+                              _gap(8),
+                              _WorkoutActivityBars(
+                                days: insights.statistics!.weeklyActivity,
+                                language: _language,
+                              ),
+                            ],
+                          )
+                        : insights.week.isEmpty
+                        ? _sub(
+                            tr(
+                              'No screen time data yet.',
+                              'Данных пока нет.',
+                              'Деректер әзірге жоқ.',
+                            ),
+                          )
+                        : _UsageBars(days: insights.week, language: _language),
+                  ),
+                ],
+              );
             },
           ),
         ),
@@ -3496,14 +3654,11 @@ class _WorkoutActivityBars extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (days.isEmpty) {
-      return Text(
-        switch (language) {
-          DashboardLanguage.en => 'No workout activity yet.',
-          DashboardLanguage.ru => 'Тренировок пока нет.',
-          DashboardLanguage.kk => 'Жаттығулар әзірге жоқ.',
-        },
-        style: const TextStyle(color: _muted, fontSize: 13),
-      );
+      return Text(switch (language) {
+        DashboardLanguage.en => 'No workout activity yet.',
+        DashboardLanguage.ru => 'Тренировок пока нет.',
+        DashboardLanguage.kk => 'Жаттығулар әзірге жоқ.',
+      }, style: const TextStyle(color: _muted, fontSize: 13));
     }
     final max = days.fold<int>(
       1,

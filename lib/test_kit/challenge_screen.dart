@@ -7,23 +7,26 @@ import 'package:flutter/services.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
 import '../focus_experience/focus_exercises.dart';
-import '../focus_experience/focus_screens.dart';
 import '../focus_experience/focus_style.dart';
+import '../focus_v2/focus_camera_cover.dart';
+import '../focus_v2/focus_frame_limiter.dart';
+import '../focus_v2/focus_v2_models.dart';
+import '../focus_v2/focus_v2_screens.dart';
+import '../focus_v2/focus_v2_style.dart';
 import 'squat_counter.dart';
 
 class ChallengeScreen extends StatefulWidget {
   const ChallengeScreen({
     super.key,
     required this.exercise,
-    required this.appName,
     this.onCompleted,
     this.onCameraPermissionDenied,
     this.language = 'ru',
   });
 
   final FocusExercise exercise;
-  final String appName, language;
-  final Future<DateTime> Function(int repetitions)? onCompleted;
+  final String language;
+  final Future<VerifiedFocusGrant> Function(int repetitions)? onCompleted;
   final Future<void> Function()? onCameraPermissionDenied;
 
   @override
@@ -37,15 +40,17 @@ class _ChallengeScreenState extends State<ChallengeScreen>
     options: PoseDetectorOptions(mode: PoseDetectionMode.stream),
   );
   CameraController? _camera;
+  Widget? _preview;
   Future<void> _cameraWork = Future<void>.value();
-  Future<void>? _frameWork;
+  final _frames = FocusFrameLimiter(minimumSpacing: Duration.zero);
+  Future<bool>? _frameWork;
   bool _foreground = true;
   bool _disposed = false;
   bool _cameraFailed = false;
   bool _permissionDenied = false;
   bool _granting = false;
   bool _canceled = false;
-  int? _grantedMinutes;
+  bool _grantDispatched = false;
   late String _message = _t(
     'Подготовка камеры…',
     'Starting camera…',
@@ -80,7 +85,10 @@ class _ChallengeScreenState extends State<ChallengeScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _foreground = state == AppLifecycleState.resumed;
-    if (!_foreground) _counter.update(null);
+    if (!_foreground) {
+      _frames.invalidate();
+      _counter.update(null);
+    }
     _syncCamera();
   }
 
@@ -90,7 +98,13 @@ class _ChallengeScreenState extends State<ChallengeScreen>
         final camera = _camera;
         _camera = null;
         if (camera == null) return;
-        if (!_disposed) setState(() => _trackingReady = false);
+        _frames.invalidate();
+        if (!_disposed) {
+          setState(() {
+            _preview = null;
+            _trackingReady = false;
+          });
+        }
         await _disposeCamera(camera);
       } else if (_camera == null) {
         await _openCamera();
@@ -123,6 +137,7 @@ class _ChallengeScreenState extends State<ChallengeScreen>
       if (!_wantsCamera) return;
       setState(() {
         _camera = camera;
+        _preview = focusV2CameraCover(camera);
         _message = _t(
           'Встань боком так, чтобы в кадре были корпус и ноги.',
           'Stand sideways with your body and legs in frame.',
@@ -139,9 +154,9 @@ class _ChallengeScreenState extends State<ChallengeScreen>
         if (onDenied != null) unawaited(onDenied());
         _failCamera(
           _t(
-            'Разреши доступ к камере и попробуй ещё раз.',
-            'Allow camera access and try again.',
-            'Камераға рұқсат беріп, қайталап көріңіз.',
+            'Камера недоступна. Проверь разрешение и заново открой задание.',
+            'Camera unavailable. Check permission and reopen the challenge.',
+            'Камера қолжетімсіз. Рұқсатты тексеріп, тапсырманы қайта аш.',
           ),
         );
       } else if (_wantsCamera) {
@@ -216,7 +231,7 @@ class _ChallengeScreenState extends State<ChallengeScreen>
   }
 
   void _onFrame(CameraController camera, CameraImage image) {
-    if (!_wantsCamera || _camera != camera || _frameWork != null) return;
+    if (!_wantsCamera || _camera != camera || _frames.busy) return;
     final input = fromCameraImage(camera, image);
     if (input == null) {
       _failCamera(
@@ -228,15 +243,21 @@ class _ChallengeScreenState extends State<ChallengeScreen>
       );
       return;
     }
-    _frameWork = _processPose(camera, input).whenComplete(() {
-      _frameWork = null;
-    });
+    _frameWork = _frames
+        .submit((token) => _processPose(camera, input, token))
+        .whenComplete(() => _frameWork = null);
   }
 
-  Future<void> _processPose(CameraController camera, InputImage input) async {
+  Future<void> _processPose(
+    CameraController camera,
+    InputImage input,
+    int token,
+  ) async {
     try {
       final poses = await _detector.processImage(input);
-      if (!_wantsCamera || _camera != camera) return;
+      if (!_frames.isCurrent(token) || !_wantsCamera || _camera != camera) {
+        return;
+      }
       final knee = poses.isEmpty ? null : estimateKneeAngle(poses.first);
       final previousCount = _counter.reps;
       _counter.update(knee);
@@ -287,7 +308,7 @@ class _ChallengeScreenState extends State<ChallengeScreen>
         }
       }
     } catch (error) {
-      if (_wantsCamera && _camera == camera) {
+      if (_frames.isCurrent(token) && _wantsCamera && _camera == camera) {
         debugPrint('Could not track challenge pose: $error');
         _failCamera(
           _t(
@@ -367,17 +388,15 @@ class _ChallengeScreenState extends State<ChallengeScreen>
         );
         return;
       }
-      final deadline = await widget.onCompleted!(_counter.reps);
-      final remaining = deadline.difference(DateTime.now());
-      if (remaining <= Duration.zero) {
-        throw StateError(
-          'The Focus engine did not return an active access window',
-        );
+      setState(() => _grantDispatched = true);
+      final grant = await widget.onCompleted!(_counter.reps);
+      if (!grant.isConfirmedAt(DateTime.now())) {
+        throw StateError('The Focus access window has expired');
       }
-      if (mounted) {
-        setState(
-          () => _grantedMinutes = (remaining.inMilliseconds / 60000).ceil(),
-        );
+      // Android already opens the target after the grant. Close this route
+      // after verification so it does not cover LevelUp when the user returns.
+      if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+        Navigator.of(context).pop();
       }
     } catch (error) {
       debugPrint('Could not grant challenge access: $error');
@@ -391,7 +410,12 @@ class _ChallengeScreenState extends State<ChallengeScreen>
         );
       }
     } finally {
-      if (mounted) setState(() => _granting = false);
+      if (mounted) {
+        setState(() {
+          _granting = false;
+          _grantDispatched = false;
+        });
+      }
     }
   }
 
@@ -399,6 +423,7 @@ class _ChallengeScreenState extends State<ChallengeScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _disposed = true;
+    _frames.invalidate();
     _syncCamera();
     unawaited(
       _cameraWork.then((_) async {
@@ -417,49 +442,38 @@ class _ChallengeScreenState extends State<ChallengeScreen>
 
   @override
   Widget build(BuildContext context) {
-    if (_grantedMinutes case final minutes?) {
-      return FocusAccessGrantedScreen(
-        appName: widget.appName,
-        accessMinutes: minutes,
-        language: widget.language,
-        onDone: () => Navigator.of(context).pop(),
-      );
-    }
-    final camera = _camera;
+    final error = _error;
     return PopScope(
-      canPop: !_granting,
+      canPop: !_grantDispatched,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) {
           _canceled = true;
+          _frames.invalidate();
           _syncCamera();
         }
       },
-      child: FocusChallengeScreen(
-        exercise: widget.exercise,
-        repetitions: _counter.reps,
-        language: widget.language,
-        cameraReady: camera != null,
-        trackingReady: _trackingReady && !_counter.isComplete,
-        cameraPreview: _counter.isComplete
-            ? null
-            : camera != null
-            ? CameraPreview(camera)
-            : _cameraFailed
-            ? const Icon(Icons.no_photography_outlined)
-            : const CircularProgressIndicator(),
-        hint: _message,
-        error: _error,
-        onCancel: _granting ? null : () => Navigator.of(context).pop(),
-        onRetry: _cameraFailed
-            ? _permissionDenied && widget.onCameraPermissionDenied != null
+      child: error == null
+          ? FocusV2CameraScreen(
+              cameraPreview:
+                  _preview ?? const ColoredBox(color: FocusV2Style.background),
+              repetitions: _counter.reps,
+              goalReps: widget.exercise.target,
+              poseDetected: _trackingReady && !_counter.isComplete,
+              language: widget.language,
+              verifying: _granting,
+              status: _message,
+            )
+          : FocusV2ErrorScreen(
+              message: error,
+              language: widget.language,
+              onRetry: _cameraFailed
+                  ? _permissionDenied && widget.onCameraPermissionDenied != null
+                        ? null
+                        : _retryCamera
+                  : _granting
                   ? null
-                  : _retryCamera
-            : _counter.isComplete &&
-                  widget.onCompleted != null &&
-                  _error != null
-            ? _grantAccess
-            : null,
-      ),
+                  : _grantAccess,
+            ),
     );
   }
 }

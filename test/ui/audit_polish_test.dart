@@ -296,8 +296,9 @@ void main() {
             MaterialApp(
               key: ValueKey(route.runtimeType),
               builder: (context, child) => MediaQuery(
-                data: MediaQuery.of(context)
-                    .copyWith(textScaler: TextScaler.linear(2)),
+                data: MediaQuery.of(
+                  context,
+                ).copyWith(textScaler: TextScaler.linear(2)),
                 child: child!,
               ),
               home: route,
@@ -332,8 +333,9 @@ void main() {
         await tester.pumpWidget(
           MaterialApp(
             builder: (context, child) => MediaQuery(
-              data: MediaQuery.of(context)
-                  .copyWith(textScaler: TextScaler.linear(2)),
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(2)),
               child: child!,
             ),
             home: LevelUpHomeScreen(
