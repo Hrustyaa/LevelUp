@@ -8,16 +8,19 @@ class AndroidUsageGateway {
 
   static const _channel = MethodChannel('levelup/usage');
 
-  Future<DashboardInsights> read(Set<String> packageIds) async {
+  Future<Map<String, Object?>?> readUsageData(Set<String> packageIds) async {
     if (kIsWeb ||
         defaultTargetPlatform != TargetPlatform.android ||
         packageIds.isEmpty) {
-      return const DashboardInsights();
+      return null;
     }
-    final data = await _channel.invokeMapMethod<String, Object?>(
-      'getScreenTime',
-      {'packageIds': packageIds.toList(growable: false)},
-    );
+    return _channel.invokeMapMethod<String, Object?>('getScreenTime', {
+      'packageIds': packageIds.toList(growable: false),
+    });
+  }
+
+  Future<DashboardInsights> read(Set<String> packageIds) async {
+    final data = await readUsageData(packageIds);
     if (data == null) return const DashboardInsights();
 
     final today = data['todayMs'];
@@ -28,12 +31,10 @@ class AndroidUsageGateway {
       week: [
         if (week is List)
           for (final day in week)
-            if (day
-                case {
-                  'dateMs': final int date,
-                  'durationMs': final int duration,
-                }
-                when duration >= 0)
+            if (day case {
+              'dateMs': final int date,
+              'durationMs': final int duration,
+            } when duration >= 0)
               UsageDay(
                 DateTime.fromMillisecondsSinceEpoch(date),
                 duration ~/ 60000,

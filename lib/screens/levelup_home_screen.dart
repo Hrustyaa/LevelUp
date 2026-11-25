@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../data/dashboard_data.dart';
 import '../free_workout/workout_challenge_tab.dart';
+import '../progress/progress_tab.dart';
 import 'levelup_focus_setup_screen.dart';
 
 const _bg = Color(0xFF0A0F10),
@@ -82,6 +83,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
   int _seconds = 0;
   bool _foreground = true;
   final _scrolls = {for (final t in DashboardTab.values) t: ScrollController()};
+  final _progressKey = GlobalKey<LevelUpProgressTabState>();
 
   String tr(String en, String ru, String kk) => switch (_language) {
     DashboardLanguage.en => en,
@@ -316,7 +318,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
                   child: RefreshIndicator(
                     color: _lime,
                     backgroundColor: _surface,
-                    onRefresh: _refresh,
+                    onRefresh: _refreshVisibleTab,
                     child: ListView(
                       key: PageStorageKey(_tab),
                       controller: _scrolls[_tab],
@@ -2350,20 +2352,21 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     await _refresh();
   }
 
+  Future<void> _refreshVisibleTab() async {
+    if (_tab == DashboardTab.progress) {
+      await _progressKey.currentState?.refresh();
+    } else {
+      await _refresh();
+    }
+  }
+
   List<Widget> _progress() => [
-    _title(tr('Your progress', 'Твой прогресс', 'Ілгерілеуің'), 26),
-    _gap(),
-    _levelCard(onTap: _openLevel),
-    _gap(),
-    _section(tr('Screen time', 'Экранное время', 'Экран уақыты')),
-    _usageCard(),
-    _gap(),
-    _section(
-      tr('Activity', 'Активность', 'Белсенділік'),
-      action: tr('See all ›', 'Вся история ›', 'Барлығы ›'),
-      onTap: _openActivity,
+    LevelUpProgressTab(
+      key: _progressKey,
+      trackedPackageIds: _currentDraft?.packageIds ?? widget.draftIds,
+      language: _language.name,
+      onOpenUsagePermissions: widget.onPermissions,
     ),
-    _eventsCard(limit: 5),
   ];
   List<Widget> _settings() => [
     _title(tr('Preferences', 'Предпочтения', 'Қалаулар'), 26),
