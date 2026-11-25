@@ -2,26 +2,34 @@ import '../../core/constants/channel_constants.dart';
 import '../../data/dashboard_data.dart';
 import '../../data/repositories/access_attempt_repository.dart';
 import '../../data/repositories/workout_history_repository.dart';
+import '../../features/progress/application/progress_service.dart';
+import '../../features/progress/models/level_info.dart';
+import '../../features/progress/models/progress_state.dart';
+import '../../features/progress/models/streak_info.dart';
+import '../../features/progress/models/xp_reward_record.dart';
 import '../../models/access_attempt_record.dart';
 import '../../models/challenge_type.dart';
 import '../../models/workout_result.dart';
 
-/// Production adapter generating [DashboardInsights] from local SQLite repositories.
+/// Production adapter generating [DashboardInsights] from local SQLite repositories
+/// and the authoritative [IProgressService] (Module 09A).
 ///
-/// Reads verified workout history and confirmed unlock records.
-/// Honestly reports [todayUsageMinutes] and [totalXp] as null because Android
-/// UsageStatsManager and Module 09 (XP & Progress Engine) are not implemented yet.
+/// Honestly reports [todayUsageMinutes] as null because Android UsageStatsManager
+/// is not implemented yet.
 class CoreInsightsAdapter {
   final IWorkoutHistoryRepository _historyRepo;
   final IAccessAttemptRepository _accessRepo;
+  final IProgressService? _progressService;
   final DateTime Function() _clock;
 
   CoreInsightsAdapter({
     required IWorkoutHistoryRepository historyRepo,
     required IAccessAttemptRepository accessRepo,
+    IProgressService? progressService,
     DateTime Function()? clock,
   })  : _historyRepo = historyRepo,
         _accessRepo = accessRepo,
+        _progressService = progressService,
         _clock = clock ?? DateTime.now;
 
   Future<DashboardInsights> loadInsights([Set<String>? packageIds]) async {
@@ -29,12 +37,14 @@ class CoreInsightsAdapter {
     final startOfDay = DateTime(now.year, now.month, now.day);
     final endOfDay = startOfDay.add(const Duration(days: 1));
 
-    final results = await Future.wait<Object>([
+    final results = await Future.wait<Object?>([
       _historyRepo.getRecentWorkouts(limit: 50),
       _accessRepo.getRecentAttempts(limit: 50),
+      if (_progressService != null) _progressService.refresh() else Future.value(null),
     ]);
     final rawWorkouts = results[0] as List<WorkoutResult>;
     final rawAttempts = results[1] as List<AccessAttemptRecord>;
+    final progressState = results[2] as ProgressState?;
 
     // Deduplicate by sessionId to guarantee zero double-counting.
     final workoutsBySession = <String, WorkoutResult>{};
@@ -47,6 +57,16 @@ class CoreInsightsAdapter {
       if (a.isConfirmed) {
         confirmedBySession.putIfAbsent(a.sessionId, () => a);
       }
+    }
+
+    final hasProgressError = progressState?.errorMessage != null;
+    final List<XpRewardRecord> recentRewards =
+        (progressState != null && !hasProgressError)
+            ? progressState.recentRewards
+            : const [];
+    final rewardsBySession = <String, XpRewardRecord>{};
+    for (final r in recentRewards) {
+      rewardsBySession.putIfAbsent(r.sessionId, () => r);
     }
 
     bool isToday(DateTime dt) {
@@ -71,6 +91,7 @@ class CoreInsightsAdapter {
       final confirmed = w.challengeContext == ChallengeType.unlockChallenge
           ? confirmedBySession[w.sessionId]
           : null;
+      final rewardXp = rewardsBySession[w.sessionId]?.xpAmount;
 
       if (confirmed != null) {
         events.add(
@@ -81,7 +102,7 @@ class CoreInsightsAdapter {
             appName: targetName,
             minutes: (confirmed.durationSeconds / 60).round(),
             detail: '${w.completedRepetitions} squats',
-            xp: null, // Module 09 XP & Progress Engine not implemented yet
+            xp: rewardXp,
           ),
         );
       } else {
@@ -95,7 +116,7 @@ class CoreInsightsAdapter {
                 : null,
             minutes: null,
             detail: '${w.completedRepetitions} squats',
-            xp: null, // Module 09 XP & Progress Engine not implemented yet
+            xp: rewardXp,
           ),
         );
       }
@@ -111,18 +132,40 @@ class CoreInsightsAdapter {
           at: (a.confirmedAt ?? a.attemptedAt).toLocal(),
           appName: _displayName(a.targetPackage),
           minutes: (a.durationSeconds / 60).round(),
-          xp: null,
+          xp: rewardsBySession[a.sessionId]?.xpAmount,
         ),
       );
     }
 
     events.sort((a, b) => b.at.compareTo(a.at));
 
+    final int? totalXp;
+    final LevelInfo? levelInfo;
+    final StreakInfo? streakInfo;
+    final int? completedWorkoutCount;
+
+    if (progressState != null && !hasProgressError) {
+      totalXp = progressState.totalXp;
+      levelInfo = progressState.levelInfo;
+      streakInfo = progressState.streakInfo;
+      completedWorkoutCount = progressState.completedWorkoutCount;
+    } else {
+      totalXp = null;
+      levelInfo = null;
+      streakInfo = null;
+      completedWorkoutCount = null;
+    }
+
     return DashboardInsights(
       todayUsageMinutes: null, // OS screen time honestly unavailable
       todayUnlocks: todayUnlocks,
       todayWorkouts: todayWorkouts,
-      totalXp: null, // Module 09 XP & Progress Engine not implemented yet
+      totalXp: totalXp,
+      levelInfo: levelInfo,
+      streakInfo: streakInfo,
+      completedWorkoutCount: completedWorkoutCount,
+      recentRewards: recentRewards,
+      progressError: progressState?.errorMessage,
       week: const [],
       events: events,
       usageByApp: const {},

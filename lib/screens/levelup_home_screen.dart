@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show listEquals, mapEquals, setEquals;
 import 'package:material_ui/material_ui.dart';
 
 import '../data/dashboard_data.dart';
+import '../features/progress/models/progress_state.dart';
 import 'levelup_focus_setup_screen.dart';
 
 const _bg = Color(0xFF0A0F10),
@@ -38,6 +39,7 @@ class LevelUpHomeScreen extends StatefulWidget {
     this.onLanguageChanged,
     this.onBreakCompleted,
     this.refreshToken = 0,
+    this.progressStream,
     this.soundFeedbackEnabled,
     this.diagnosticLoggingEnabled,
     this.onSoundFeedbackChanged,
@@ -64,6 +66,7 @@ class LevelUpHomeScreen extends StatefulWidget {
   final ValueChanged<DashboardLanguage>? onLanguageChanged;
   final ValueChanged<DateTime>? onBreakCompleted;
   final int refreshToken;
+  final Stream<ProgressState>? progressStream;
   final bool? soundFeedbackEnabled, diagnosticLoggingEnabled;
   final Future<void> Function(bool)? onSoundFeedbackChanged,
       onDiagnosticLoggingChanged;
@@ -82,9 +85,12 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
   bool _loading = true,
       _focusError = false,
       _insightsError = false,
-      _busy = false;
+      _busy = false,
+      _refreshing = false;
   int _generation = 0;
   Timer? _ticker;
+  StreamSubscription<ProgressState>? _progressSub;
+  Object? _lastProgressSignature;
   DateTime _now = DateTime.now();
   final _countdown = ValueNotifier(DateTime.now());
   int _seconds = 0;
@@ -100,8 +106,40 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _bindProgressStream();
     _refresh();
     _startTicker();
+  }
+
+  Object _signatureFromState(ProgressState state) => (
+    state.totalXp,
+    state.completedWorkoutCount,
+    state.streakInfo.currentStreak,
+    state.streakInfo.longestStreak,
+    state.streakInfo.completedToday,
+    state.recentRewards.firstOrNull?.sessionId,
+    state.errorMessage,
+  );
+
+  Object _signatureFromInsights(DashboardInsights insights) => (
+    insights.totalXp,
+    insights.completedWorkoutCount,
+    insights.streakInfo?.currentStreak,
+    insights.streakInfo?.longestStreak,
+    insights.streakInfo?.completedToday,
+    insights.recentRewards.firstOrNull?.sessionId,
+    insights.progressError,
+  );
+
+  void _bindProgressStream() {
+    _progressSub?.cancel();
+    _progressSub = widget.progressStream?.listen((state) {
+      if (!mounted || state.isLoading || _refreshing) return;
+      final sig = _signatureFromState(state);
+      if (sig == _lastProgressSignature) return;
+      _lastProgressSignature = sig;
+      _refresh();
+    });
   }
 
   @override
@@ -110,6 +148,9 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     if (oldWidget.language != widget.language) _language = widget.language;
     if (oldWidget.focusDraft != widget.focusDraft) {
       _currentDraft = widget.focusDraft;
+    }
+    if (oldWidget.progressStream != widget.progressStream) {
+      _bindProgressStream();
     }
     if (oldWidget.gateway != widget.gateway ||
         oldWidget.loadInsights != widget.loadInsights ||
@@ -160,6 +201,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _ticker?.cancel();
+    _progressSub?.cancel();
     _insightState.dispose();
     _countdown.dispose();
     for (final s in _scrolls.values) {
@@ -171,34 +213,44 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
   Future<void> _refresh({bool quiet = false}) async {
     final generation = ++_generation;
     if (!mounted) return;
+    _refreshing = true;
     if (!quiet) setState(() => _loading = true);
     FocusSnapshot? next;
     var insights = quiet ? _insights : const DashboardInsights();
     var focusError = false;
     var insightsError = quiet && _insightsError;
     // Independent reads: a failed stats provider does not mask the engine status.
-    await Future.wait<void>([
-      () async {
-        try {
-          next = await widget.gateway.read().timeout(
-            const Duration(seconds: 5),
-          );
-        } catch (_) {
-          focusError = true;
-        }
-      }(),
-      () async {
-        try {
-          if (!quiet && widget.loadInsights != null) {
-            insights = await widget.loadInsights!().timeout(
+    try {
+      await Future.wait<void>([
+        () async {
+          try {
+            next = await widget.gateway.read().timeout(
               const Duration(seconds: 5),
             );
+          } catch (_) {
+            focusError = true;
           }
-        } catch (_) {
-          insightsError = true;
-        }
-      }(),
-    ]);
+        }(),
+        () async {
+          try {
+            if (!quiet && widget.loadInsights != null) {
+              insights = await widget.loadInsights!().timeout(
+                const Duration(seconds: 5),
+              );
+            }
+          } catch (_) {
+            insightsError = true;
+          }
+        }(),
+      ]);
+      if (!quiet && widget.loadInsights != null && !insightsError) {
+        _lastProgressSignature = _signatureFromInsights(insights);
+      }
+    } finally {
+      if (generation == _generation) {
+        _refreshing = false;
+      }
+    }
     if (!mounted || generation != _generation) return;
     if (quiet &&
         !_loading &&
@@ -884,8 +936,13 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     ),
   );
   Widget _levelCard({VoidCallback? onTap}) {
+    final info = _insights.levelInfo;
     final xp = _insights.totalXp;
-    final level = xp == null ? null : DashboardLevel.fromXp(xp);
+    final legacyLevel = (info == null && xp != null)
+        ? DashboardLevel.fromXp(xp)
+        : null;
+    final currentLevel = info?.level ?? legacyLevel?.level;
+    final progressError = _insights.progressError;
     return _card(
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -896,9 +953,9 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
               const SizedBox(width: 8),
               Expanded(
                 child: _title(
-                  level == null
+                  currentLevel == null
                       ? tr('Level & XP', 'Уровень и XP', 'Деңгей және XP')
-                      : '${tr('Level', 'Уровень', 'Деңгей')} ${level.level}',
+                      : '${tr('Level', 'Уровень', 'Деңгей')} $currentLevel',
                   17,
                 ),
               ),
@@ -906,27 +963,48 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
             ],
           ),
           _gap(8),
-          if (level == null)
+          if (progressError != null)
+            _sub(
+              tr(
+                'Progress could not be loaded.',
+                'Не удалось загрузить прогресс.',
+                'Ілгерілеуді жүктеу мүмкін болмады.',
+              ),
+            )
+          else if (info != null) ...[
+            _sub(
+              '${info.xpIntoCurrentLevel} / ${info.xpRequiredForNextLevel} XP · ${info.totalXp} ${tr('total XP', 'всего XP', 'барлық XP')}',
+            ),
+            _gap(7),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: info.progressFraction,
+                minHeight: 5,
+                backgroundColor: _border,
+                color: _lime,
+              ),
+            ),
+          ] else if (legacyLevel != null) ...[
+            _sub('${legacyLevel.xp} / ${legacyLevel.next} XP'),
+            _gap(7),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: legacyLevel.fraction,
+                minHeight: 5,
+                backgroundColor: _border,
+                color: _lime,
+              ),
+            ),
+          ] else
             _sub(
               tr(
                 'Progress is not available yet.',
                 'Прогресс пока недоступен.',
                 'Ілгерілеу әзірге қолжетімсіз.',
               ),
-            )
-          else ...[
-            _sub('${level.xp} / ${level.next} XP'),
-            _gap(7),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: level.fraction,
-                minHeight: 5,
-                backgroundColor: _border,
-                color: _lime,
-              ),
             ),
-          ],
         ],
       ),
       onTap: onTap,
@@ -2412,6 +2490,10 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       _gap(),
     ],
     _levelCard(onTap: _openLevel),
+    if (_insights.streakInfo != null) ...[
+      _gap(),
+      _streakCard(),
+    ],
     _gap(),
     _section(tr('Screen time', 'Экранное время', 'Экран уақыты')),
     _usageCard(),
@@ -2423,6 +2505,39 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     ),
     _eventsCard(limit: 5),
   ];
+  Widget _streakCard() {
+    final s = _insights.streakInfo!;
+    return _card(
+      Row(
+        children: [
+          Icon(
+            Icons.local_fire_department_rounded,
+            color: s.completedToday ? _lime : _muted,
+            size: 24,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _title(
+                  '${s.currentStreak} ${tr('day streak', 'дн. подряд', 'күн қатарынан')}',
+                  17,
+                ),
+                _gap(4),
+                _sub(
+                  '${tr('Longest', 'Рекорд', 'Ең ұзақ')}: ${s.longestStreak} · ${s.completedToday ? tr('Completed today', 'Выполнено сегодня', 'Бүгін орындалды') : tr('Not yet today', 'Сегодня ещё нет', 'Бүгін әлі жоқ')}',
+                  12,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      key: const ValueKey('progress_streak'),
+    );
+  }
+
   List<Widget> _settings() => [
     _title(tr('Preferences', 'Предпочтения', 'Қалаулар'), 26),
     _gap(),
@@ -2794,8 +2909,15 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
   }
 
   void _openLevel() {
+    final info = _insights.levelInfo;
     final xp = _insights.totalXp;
-    final level = xp == null ? null : DashboardLevel.fromXp(xp);
+    final legacyLevel = (info == null && xp != null)
+        ? DashboardLevel.fromXp(xp)
+        : null;
+    final remainingXp = info?.xpRemainingToNextLevel ?? legacyLevel?.remaining;
+    final nextLevel = info != null
+        ? info.level + 1
+        : (legacyLevel != null ? legacyLevel.level + 1 : null);
     final entries = _sortedEvents
         .where((e) => e.xp != null && e.xp! > 0)
         .toList();
@@ -2803,10 +2925,10 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       MaterialPageRoute(
         builder: (_) => _detail(tr('Your level', 'Твой уровень', 'Деңгейің'), [
           _levelCard(),
-          if (level != null) ...[
+          if (remainingXp != null && nextLevel != null) ...[
             _gap(12),
             _sub(
-              '${level.remaining} XP ${tr('to Level', 'до уровня', 'келесі деңгейге')} ${level.level + 1}',
+              '$remainingXp XP ${tr('to Level', 'до уровня', 'келесі деңгейге')} $nextLevel',
             ),
           ],
           _gap(),

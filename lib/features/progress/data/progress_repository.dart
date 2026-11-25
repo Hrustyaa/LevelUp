@@ -28,6 +28,7 @@ class SqliteProgressRepository implements IProgressRepository {
   static const String _epochKey = 'progress_epoch_ms';
 
   final LevelUpDatabase _dbManager;
+  int? _cachedEpochMs;
 
   SqliteProgressRepository({LevelUpDatabase? databaseManager})
       : _dbManager = databaseManager ?? LevelUpDatabase();
@@ -91,7 +92,23 @@ class SqliteProgressRepository implements IProgressRepository {
 
   @override
   Future<int> getOrCreateProgressEpochMs(int defaultEpochMs) async {
+    if (_cachedEpochMs != null) return _cachedEpochMs!;
     final db = await _dbManager.database;
+    final existing = await db.query(
+      DatabaseConstants.tableAppSettings,
+      columns: [DatabaseConstants.colSettingsValue],
+      where: '${DatabaseConstants.colSettingsKey} = ?',
+      whereArgs: [_epochKey],
+      limit: 1,
+    );
+    if (existing.isNotEmpty) {
+      final parsed =
+          int.tryParse(existing.first[DatabaseConstants.colSettingsValue] as String);
+      if (parsed != null) {
+        _cachedEpochMs = parsed;
+        return parsed;
+      }
+    }
     return db.transaction((txn) async {
       final rows = await txn.query(
         DatabaseConstants.tableAppSettings,
@@ -103,7 +120,10 @@ class SqliteProgressRepository implements IProgressRepository {
       if (rows.isNotEmpty) {
         final parsed =
             int.tryParse(rows.first[DatabaseConstants.colSettingsValue] as String);
-        if (parsed != null) return parsed;
+        if (parsed != null) {
+          _cachedEpochMs = parsed;
+          return parsed;
+        }
       }
       await txn.insert(
         DatabaseConstants.tableAppSettings,
@@ -113,6 +133,7 @@ class SqliteProgressRepository implements IProgressRepository {
           DatabaseConstants.colSettingsUpdatedAt: defaultEpochMs,
         },
       );
+      _cachedEpochMs = defaultEpochMs;
       return defaultEpochMs;
     });
   }

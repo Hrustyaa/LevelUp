@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../features/progress/models/level_info.dart';
+import '../features/progress/models/streak_info.dart';
+import '../features/progress/models/xp_reward_record.dart';
 import 'levelup_permissions.dart';
 
 enum DashboardLanguage { en, ru, kk }
@@ -208,6 +211,11 @@ class DashboardInsights {
     this.todayUnlocks,
     this.todayWorkouts,
     this.totalXp,
+    this.levelInfo,
+    this.streakInfo,
+    this.completedWorkoutCount,
+    this.recentRewards = const [],
+    this.progressError,
     this.week = const [],
     this.events = const [],
     this.usageByApp = const {},
@@ -216,6 +224,11 @@ class DashboardInsights {
 
   /// null means unknown/unavailable, not zero. No estimated savings.
   final int? todayUsageMinutes, todayUnlocks, todayWorkouts, totalXp;
+  final LevelInfo? levelInfo;
+  final StreakInfo? streakInfo;
+  final int? completedWorkoutCount;
+  final List<XpRewardRecord> recentRewards;
+  final String? progressError;
   final List<UsageDay> week;
   final List<ActivityEntry> events;
   final Map<String, int> usageByApp;

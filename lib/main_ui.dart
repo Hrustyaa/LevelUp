@@ -666,6 +666,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
       capabilities: const FocusCapabilities(),
       onSaveFocusDraft: _saveFocusDraft,
       refreshToken: _homeRefreshToken,
+      progressStream: _scope?.progressService.stateStream,
       soundFeedbackEnabled: settings?.soundFeedbackEnabled,
       diagnosticLoggingEnabled: settings?.diagnosticLoggingEnabled,
       onSoundFeedbackChanged: _scope != null ? _updateSoundFeedback : null,

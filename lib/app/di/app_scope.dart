@@ -92,6 +92,7 @@ class AppScope {
         CoreInsightsAdapter(
           historyRepo: workoutHistoryRepository,
           accessRepo: accessAttemptRepository,
+          progressService: this.progressService,
         );
   }
 

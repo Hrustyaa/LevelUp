@@ -345,6 +345,10 @@ void main() {
 
       pendingChallenge = true;
       await tester.pumpWidget(LevelUpIntroDemo(scope: scope));
+      // _HomeState._refresh() fires 5-second timeout timers for gateway.read()
+      // and loadInsights(). Advance fake time past the timeout so those timers
+      // fire before we let the widget tree be torn down.
+      await tester.pump(const Duration(seconds: 6));
       await tester.pumpAndSettle();
 
       // Gate request consumed exactly once and ProductionChallengeScreen opened
@@ -357,11 +361,17 @@ void main() {
       expect(screen.appName, 'YouTube');
       expect(grantCount, 0);
 
-      // Resuming again while already open does NOT double-consume
+      // Resuming again while already open does NOT double-consume.
+      // The resumed lifecycle triggers _HomeState._refresh() again with new
+      // 5-second timeout timers; advance fake time past the timeout.
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-      await tester.pump(const Duration(seconds: 2));
+      await tester.pump(const Duration(seconds: 6));
       await tester.pumpAndSettle();
       expect(consumeCount, 1);
+
+      // Send paused to cancel the periodic _ticker before disposal.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
     });
 
     testWidgets('2. Missing or stale pending request does not launch challenge', (tester) async {
