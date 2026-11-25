@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show listEquals, mapEquals, setEquals;
 import 'package:material_ui/material_ui.dart';
 
 import '../data/dashboard_data.dart';
+import '../free_workout/workout_challenge_tab.dart';
 import 'levelup_focus_setup_screen.dart';
 
 const _bg = Color(0xFF0A0F10),
@@ -2298,41 +2299,14 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       ),
     ),
     _gap(),
-    _card(
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.directions_walk_rounded, color: _muted, size: 26),
-          _gap(8),
-          _title(tr('Movement', 'Движение', 'Қозғалыс')),
-          _gap(5),
-          _sub(
-            widget.onMovement == null
-                ? tr(
-                    'Open your selected app with Focus on to start the movement challenge.',
-                    'Чтобы начать упражнение, открой выбранное приложение при включённом фокусе.',
-                    'Жаттығуды бастау үшін фокус қосулы кезде таңдалған қолданбаны ашыңыз.',
-                  )
-                : tr(
-                    'Optional movement activity. Stop whenever you want.',
-                    'Добровольное движение. Можно остановиться в любой момент.',
-                    'Ерікті қозғалыс. Кез келген уақытта тоқтатуға болады.',
-                  ),
-          ),
-          if (widget.onMovement != null) ...[
-            _gap(12),
-            _primary(
-              tr(
-                'Open movement challenge',
-                'Открыть задание',
-                'Тапсырманы ашу',
-              ),
-              _busy ? null : () => _action(widget.onMovement!),
-            ),
-          ],
-        ],
+    WorkoutChallengeTab(language: _language.name),
+    if (widget.onMovement case final openMovement?) ...[
+      _gap(10),
+      _primary(
+        tr('Open movement challenge', 'Открыть задание', 'Тапсырманы ашу'),
+        _busy ? null : () => _action(openMovement),
       ),
-    ),
+    ],
     _gap(10),
     _card(
       Column(
@@ -2567,10 +2541,12 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
             _gap(3),
             _sub(
               [
-                MaterialLocalizations.of(context)
-                    .formatShortDate(e.at.toLocal()),
-                MaterialLocalizations.of(context)
-                    .formatTimeOfDay(TimeOfDay.fromDateTime(e.at.toLocal())),
+                MaterialLocalizations.of(
+                  context,
+                ).formatShortDate(e.at.toLocal()),
+                MaterialLocalizations.of(
+                  context,
+                ).formatTimeOfDay(TimeOfDay.fromDateTime(e.at.toLocal())),
                 if (e.minutes != null) _minutes(e.minutes),
               ].join(' · '),
               12,
