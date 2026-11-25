@@ -18,9 +18,14 @@ class MainActivity : FlutterActivity() {
         "com.zhiliaoapp.musically"
     )
 
+    private var permissionsBridge: LevelUpPermissionsChannel? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
+        val messenger = flutterEngine.dartExecutor.binaryMessenger
+        permissionsBridge = LevelUpPermissionsChannel(this, messenger, ::isServiceEnabled)
+        AppCatalogChannel.register(applicationContext, messenger, allowedTargets)
+        MethodChannel(messenger, channelName)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "getState" -> {
@@ -99,6 +104,21 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        permissionsBridge?.onRequestPermissionsResult(requestCode)
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        permissionsBridge?.dispose()
+        permissionsBridge = null
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     private fun isServiceEnabled(): Boolean {

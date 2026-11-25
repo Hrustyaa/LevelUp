@@ -535,8 +535,10 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
               content: Text(switch (_language) {
                 LevelUpLanguage.en =>
                   'Focus turned off because its current app was removed.',
-                LevelUpLanguage.ru => 'Фокус выключен, потому что текущее приложение удалено из списка.',
-                LevelUpLanguage.kk => 'Ағымдағы қолданба тізімнен алынды, сондықтан фокус өшірілді.',
+                LevelUpLanguage.ru =>
+                  'Фокус выключен, потому что текущее приложение удалено из списка.',
+                LevelUpLanguage.kk =>
+                  'Ағымдағы қолданба тізімнен алынды, сондықтан фокус өшірілді.',
               }),
             ),
           );
@@ -607,9 +609,12 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
             LevelUpLanguage.kk => 'Рұқсат қажет',
           }, style: const TextStyle(color: LevelUpColors.text, fontSize: 18)),
           content: Text(switch (_language) {
-            LevelUpLanguage.en => 'To shield selected apps, LevelUp needs the Accessibility Service permission. Please enable it in Android Settings.',
-            LevelUpLanguage.ru => 'Для защиты приложений LevelUp требуется разрешение Специальных возможностей. Пожалуйста, включи его в настройках.',
-            LevelUpLanguage.kk => 'Қолданбаларды қорғау үшін LevelUp-ке Арнайы мүмкіндіктер рұқсаты қажет. Оны баптаулардан қосыңыз.',
+            LevelUpLanguage.en =>
+              'To shield selected apps, LevelUp needs the Accessibility Service permission. Please enable it in Android Settings.',
+            LevelUpLanguage.ru =>
+              'Для защиты приложений LevelUp требуется разрешение Специальных возможностей. Пожалуйста, включи его в настройках.',
+            LevelUpLanguage.kk =>
+              'Қолданбаларды қорғау үшін LevelUp-ке Арнайы мүмкіндіктер рұқсаты қажет. Оны баптаулардан қосыңыз.',
           }, style: const TextStyle(color: LevelUpColors.muted, fontSize: 14)),
           actions: [
             TextButton(
@@ -679,9 +684,12 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
                 Padding(
                   padding: const EdgeInsets.fromLTRB(24, 0, 24, 10),
                   child: Text(switch (_language) {
-                    LevelUpLanguage.en => 'Focus stays on until you turn it off. Completing a challenge grants 5 minutes of access.',
-                    LevelUpLanguage.ru => 'Фокус действует до ручного отключения. За выполненное задание открывается 5 минут доступа.',
-                    LevelUpLanguage.kk => 'Фокус қолмен өшірілгенше қосулы болады. Тапсырма орындалса, 5 минутқа рұқсат беріледі.',
+                    LevelUpLanguage.en =>
+                      'Focus stays on until you turn it off. Completing a challenge grants 5 minutes of access.',
+                    LevelUpLanguage.ru =>
+                      'Фокус действует до ручного отключения. За выполненное задание открывается 5 минут доступа.',
+                    LevelUpLanguage.kk =>
+                      'Фокус қолмен өшірілгенше қосулы болады. Тапсырма орындалса, 5 минутқа рұқсат беріледі.',
                   }),
                 ),
                 for (final app in eligible)

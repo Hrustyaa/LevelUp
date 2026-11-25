@@ -121,8 +121,9 @@ class _PermissionsState extends State<LevelUpPermissionsScreen>
       await widget.gateway.request(p);
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(c.requestError)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(c.requestError)));
       }
     } finally {
       if (mounted) {
@@ -137,8 +138,9 @@ class _PermissionsState extends State<LevelUpPermissionsScreen>
       await widget.gateway.openAppSettings();
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(c.requestError)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(c.requestError)));
       }
     }
   }
@@ -650,12 +652,15 @@ const _copies = {
     openSettings: 'Open settings',
     manage: 'Manage app permissions',
     retry: 'Try again',
-    focusOff: 'Without Accessibility access, Focus stays off. You can still finish setup.',
+    focusOff:
+        'Without Accessibility access, Focus stays off. You can still finish setup.',
     readError: 'Could not check permissions.',
     requestError:
         'Could not open the permission request. Try again or use Settings.',
-    accessibilityDisclosure: 'LevelUp uses Accessibility app/window change events to detect when you open selected apps and show a voluntary focus screen. This feature does not read screen text or take screenshots. Android grants a sensitive permission; only enable it if you agree. You can disable Focus and revoke access at any time.',
-    usageDisclosure: 'Usage access lets LevelUp read app usage times for screen time insights. It is optional. Only grant it if you want these insights.',
+    accessibilityDisclosure:
+        'LevelUp uses Accessibility app/window change events to detect when you open selected apps and show a voluntary focus screen. This feature does not read screen text or take screenshots. Android grants a sensitive permission; only enable it if you agree. You can disable Focus and revoke access at any time.',
+    usageDisclosure:
+        'Usage access lets LevelUp read app usage times for screen time insights. It is optional. Only grant it if you want these insights.',
   ),
   LevelUpLanguage.ru: _Copy(
     step: 'ШАГ 3 ИЗ 3',
@@ -687,12 +692,15 @@ const _copies = {
     openSettings: 'Открыть настройки',
     manage: 'Настройки разрешений',
     retry: 'Повторить',
-    focusOff: 'Без специальных возможностей фокус останется выключенным. Настройку можно завершить.',
+    focusOff:
+        'Без специальных возможностей фокус останется выключенным. Настройку можно завершить.',
     readError: 'Не удалось проверить разрешения.',
     requestError:
         'Не удалось открыть запрос разрешения. Повтори или открой настройки.',
-    accessibilityDisclosure: 'LevelUp использует события смены приложения или окна, чтобы обнаружить открытие выбранных приложений и показать добровольное ограничение. Эта функция не читает текст экрана и не делает снимки. Android предоставляет чувствительное разрешение: включай его только с согласия. Фокус и доступ можно отключить в любой момент.',
-    usageDisclosure: 'Доступ к данным об использовании позволяет LevelUp получать время использования приложений для статистики. Это необязательно. Разреши доступ, только если нужна эта статистика.',
+    accessibilityDisclosure:
+        'LevelUp использует события смены приложения или окна, чтобы обнаружить открытие выбранных приложений и показать добровольное ограничение. Эта функция не читает текст экрана и не делает снимки. Android предоставляет чувствительное разрешение: включай его только с согласия. Фокус и доступ можно отключить в любой момент.',
+    usageDisclosure:
+        'Доступ к данным об использовании позволяет LevelUp получать время использования приложений для статистики. Это необязательно. Разреши доступ, только если нужна эта статистика.',
   ),
   LevelUpLanguage.kk: _Copy(
     step: '3-ҚАДАМ / 3',
@@ -724,11 +732,14 @@ const _copies = {
     openSettings: 'Баптауларды ашу',
     manage: 'Рұқсаттар баптауы',
     retry: 'Қайталау',
-    focusOff: 'Арнайы мүмкіндіктерге рұқсат берілмесе, фокус өшірулі қалады. Баптауды аяқтауға болады.',
+    focusOff:
+        'Арнайы мүмкіндіктерге рұқсат берілмесе, фокус өшірулі қалады. Баптауды аяқтауға болады.',
     readError: 'Рұқсаттарды тексеру мүмкін болмады.',
     requestError:
         'Рұқсат сұрауын ашу мүмкін болмады. Қайта көр немесе баптауларды аш.',
-    accessibilityDisclosure: 'LevelUp таңдалған қолданбаның ашылғанын анықтау және ерікті шектеу экранын көрсету үшін терезе ауысу оқиғаларын қолданады. Бұл функция экран мәтінін оқымайды және скриншот жасамайды. Android жүйесіндегі бұл рұқсатты тек келіссең қос. Фокус пен рұқсатты кез келген уақытта өшіруге болады.',
-    usageDisclosure: 'Бұл рұқсат экран уақытының статистикасын жасау үшін қолданбалардың қолданылу уақытын оқуға мүмкіндік береді. Міндетті емес.',
+    accessibilityDisclosure:
+        'LevelUp таңдалған қолданбаның ашылғанын анықтау және ерікті шектеу экранын көрсету үшін терезе ауысу оқиғаларын қолданады. Бұл функция экран мәтінін оқымайды және скриншот жасамайды. Android жүйесіндегі бұл рұқсатты тек келіссең қос. Фокус пен рұқсатты кез келген уақытта өшіруге болады.',
+    usageDisclosure:
+        'Бұл рұқсат экран уақытының статистикасын жасау үшін қолданбалардың қолданылу уақытын оқуға мүмкіндік береді. Міндетті емес.',
   ),
 };

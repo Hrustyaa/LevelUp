@@ -93,7 +93,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         error = null;
       });
     } catch (e) {
-      if (mounted) setState(() { error = '$e'; checking = false; });
+      if (mounted) {
+        setState(() {
+          error = '$e';
+          checking = false;
+        });
+      }
     }
   }
 
@@ -150,7 +155,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (enabled && state['serviceEnabled'] != true) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Сначала включи сервис в настройках Android.')),
+          const SnackBar(
+            content: Text('Сначала включи сервис в настройках Android.'),
+          ),
         );
       }
       return;
@@ -176,48 +183,76 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final enabled = state['enabled'] == true;
     final serviceEnabled = state['serviceEnabled'] == true;
     final unlockUntil = (state['unlockUntil'] as num? ?? 0).toInt();
-    final remaining = DateTime.fromMillisecondsSinceEpoch(unlockUntil)
-        .difference(DateTime.now());
+    final remaining = DateTime.fromMillisecondsSinceEpoch(
+      unlockUntil,
+    ).difference(DateTime.now());
     return Scaffold(
-      appBar: AppBar(title: const Text('LEVELUP / TEST'), actions: [
-        IconButton(icon: const Icon(Icons.refresh), onPressed: refresh),
-      ]),
+      appBar: AppBar(
+        title: const Text('LEVELUP / TEST'),
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: refresh),
+        ],
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
-            const Text('Earn your screen time.',
-                style: TextStyle(fontSize: 29, fontWeight: FontWeight.w800)),
+            const Text(
+              'Earn your screen time.',
+              style: TextStyle(fontSize: 29, fontWeight: FontWeight.w800),
+            ),
             const SizedBox(height: 8),
-            const Text('Тест на одном Android-телефоне. Без облака и загрузки видео.',
-                style: TextStyle(color: Colors.white70)),
+            const Text(
+              'Тест на одном Android-телефоне. Без облака и загрузки видео.',
+              style: TextStyle(color: Colors.white70),
+            ),
             const SizedBox(height: 24),
             _panel(
               title: '1. Выбери приложение для теста',
               child: DropdownButtonFormField<String>(
-                initialValue: testApps.containsKey(selected) ? selected : testApps.keys.first,
-                items: testApps.entries.map((entry) => DropdownMenuItem(
-                  value: entry.key, child: Text(entry.value),
-                )).toList(),
-                onChanged: (value) { if (value != null) changeTarget(value); },
+                initialValue: testApps.containsKey(selected)
+                    ? selected
+                    : testApps.keys.first,
+                items: testApps.entries
+                    .map(
+                      (entry) => DropdownMenuItem(
+                        value: entry.key,
+                        child: Text(entry.value),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value != null) changeTarget(value);
+                },
               ),
             ),
             _panel(
               title: '2. Доступ Android',
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(serviceEnabled ? '✓ Accessibility Service включён' :
-                    '○ Accessibility Service выключен',
-                  style: TextStyle(color: serviceEnabled ? accent : Colors.orangeAccent)),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: () => native.invokeMethod('openAccessibilitySettings'),
-                  icon: const Icon(Icons.settings_accessibility),
-                  label: const Text('Открыть спец. возможности'),
-                ),
-                const SizedBox(height: 6),
-                const Text('Сервис видит только имя активного приложения. Включается вручную; можно отключить в настройках.',
-                  style: TextStyle(fontSize: 12, color: Colors.white70)),
-              ]),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    serviceEnabled
+                        ? '✓ Accessibility Service включён'
+                        : '○ Accessibility Service выключен',
+                    style: TextStyle(
+                      color: serviceEnabled ? accent : Colors.orangeAccent,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: () =>
+                        native.invokeMethod('openAccessibilitySettings'),
+                    icon: const Icon(Icons.settings_accessibility),
+                    label: const Text('Открыть спец. возможности'),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Сервис видит только имя активного приложения. Включается вручную; можно отключить в настройках.',
+                    style: TextStyle(fontSize: 12, color: Colors.white70),
+                  ),
+                ],
+              ),
             ),
             _panel(
               title: '3. Включи добровольное ограничение',
@@ -226,37 +261,58 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 value: enabled,
                 onChanged: setGate,
                 title: Text(enabled ? 'Режим включён' : 'Режим выключен'),
-                subtitle: const Text('Экран-барьер только для выбранного приложения'),
+                subtitle: const Text(
+                  'Экран-барьер только для выбранного приложения',
+                ),
               ),
             ),
             _panel(
               title: '4. Проверка камеры и приседаний',
-              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                FilledButton.icon(
-                  onPressed: openChallenge,
-                  icon: const Icon(Icons.camera_alt_outlined),
-                  label: const Text('Начать: 5 приседаний'),
-                ),
-                const SizedBox(height: 10),
-                const Text('Зачёт только после цикла: стоя → вниз → стоя. Телефон поставь устойчиво, чтобы были видны бедро, колено и стопа.',
-                    style: TextStyle(color: Colors.white70, fontSize: 12)),
-              ]),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  FilledButton.icon(
+                    onPressed: openChallenge,
+                    icon: const Icon(Icons.camera_alt_outlined),
+                    label: const Text('Начать: 5 приседаний'),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Зачёт только после цикла: стоя → вниз → стоя. Телефон поставь устойчиво, чтобы были видны бедро, колено и стопа.',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
+              ),
             ),
             _panel(
               title: 'Текущий доступ',
-              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                Text(remaining.isNegative || remaining.inSeconds <= 0
-                    ? 'Время разблокировки истекло'
-                    : 'Разблокировано ещё примерно на ${remaining.inMinutes + 1} мин.'),
-                const SizedBox(height: 8),
-                OutlinedButton(onPressed: resetAccess, child: const Text('Сбросить доступ для теста')),
-              ]),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    remaining.isNegative || remaining.inSeconds <= 0
+                        ? 'Время разблокировки истекло'
+                        : 'Разблокировано ещё примерно на ${remaining.inMinutes + 1} мин.',
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton(
+                    onPressed: resetAccess,
+                    child: const Text('Сбросить доступ для теста'),
+                  ),
+                ],
+              ),
             ),
             if (checking) const LinearProgressIndicator(),
-            if (error != null) Text('Ошибка: $error', style: const TextStyle(color: Colors.redAccent)),
+            if (error != null)
+              Text(
+                'Ошибка: $error',
+                style: const TextStyle(color: Colors.redAccent),
+              ),
             const SizedBox(height: 12),
-            const Text('Важно: это исследовательский soft blocker. Он не гарантирует защиту от обхода или стабильную работу на всех устройствах. Можно безопасно выключить ограничение.',
-                style: TextStyle(fontSize: 12, color: Colors.white54)),
+            const Text(
+              'Важно: это исследовательский soft blocker. Он не гарантирует защиту от обхода или стабильную работу на всех устройствах. Можно безопасно выключить ограничение.',
+              style: TextStyle(fontSize: 12, color: Colors.white54),
+            ),
           ],
         ),
       ),
@@ -272,10 +328,16 @@ Widget _panel({required String title, required Widget child}) {
       color: const Color(0xFF1D252A),
       borderRadius: BorderRadius.circular(18),
     ),
-    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-      const SizedBox(height: 12),
-      child,
-    ]),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 12),
+        child,
+      ],
+    ),
   );
 }
