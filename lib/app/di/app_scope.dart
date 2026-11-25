@@ -9,6 +9,8 @@ import '../../features/challenge/application/workout_session_manager.dart';
 import '../../features/focus/application/focus_service.dart';
 import '../../features/progress/application/progress_service.dart';
 import '../../features/progress/data/progress_repository.dart';
+import '../../features/statistics/application/statistics_service.dart';
+import '../../features/statistics/data/statistics_repository.dart';
 import '../../features/settings/application/camera_permission_checker.dart';
 import '../../features/settings/application/settings_service.dart';
 import '../../features/settings/data/settings_repository.dart';
@@ -35,6 +37,8 @@ class AppScope {
   final IAccessAttemptRepository accessAttemptRepository;
   late final IProgressRepository progressRepository;
   late final IProgressService progressService;
+  late final IStatisticsRepository statisticsRepository;
+  late final IStatisticsService statisticsService;
   final IChallengeService challengeService;
   final IWorkoutSessionManager sessionManager;
   final IAccessService accessService;
@@ -62,6 +66,8 @@ class AppScope {
     required this.accessAttemptRepository,
     IProgressRepository? progressRepository,
     IProgressService? progressService,
+    IStatisticsRepository? statisticsRepository,
+    IStatisticsService? statisticsService,
     required this.challengeService,
     required this.sessionManager,
     required this.accessService,
@@ -77,6 +83,14 @@ class AppScope {
         ProgressService(
           repository: this.progressRepository,
           historyRepository: workoutHistoryRepository,
+        );
+    this.statisticsRepository =
+        statisticsRepository ?? SqliteStatisticsRepository(databaseManager: database);
+    this.statisticsService = statisticsService ??
+        StatisticsService(
+          repository: this.statisticsRepository,
+          progressService: this.progressService,
+          focusService: focusService,
         );
     this.permissionGateway = permissionGateway ??
         CorePermissionGatewayAdapter(
@@ -136,6 +150,15 @@ class AppScope {
       historyRepository: historyRepo,
       clock: effectiveClock,
     );
+    final statisticsRepo = SqliteStatisticsRepository(
+      databaseManager: effectiveDb,
+    );
+    final statisticsService = StatisticsService(
+      repository: statisticsRepo,
+      progressService: progressService,
+      focusService: focusService,
+      clock: effectiveClock,
+    );
 
     final challengeService = ChallengeService();
     final sessionManager = WorkoutSessionManager(
@@ -170,6 +193,8 @@ class AppScope {
       accessAttemptRepository: accessRepo,
       progressRepository: progressRepo,
       progressService: progressService,
+      statisticsRepository: statisticsRepo,
+      statisticsService: statisticsService,
       challengeService: challengeService,
       sessionManager: sessionManager,
       accessService: accessService,
@@ -193,8 +218,9 @@ class AppScope {
       }
       await focusService.refreshState();
 
-      // 3. Initialize Integration Coordinator & Progress Engine
+      // 3. Initialize Integration Coordinator, Progress & Statistics Engines
       await progressService.initialize();
+      await statisticsService.initialize();
       await coordinator.initialize();
 
       _initialized = true;
@@ -210,12 +236,14 @@ class AppScope {
     await settingsService.refresh();
     await focusService.refreshState();
     await progressService.refresh();
+    await statisticsService.refresh();
   }
 
   /// Disposes resources held by the engines.
   void dispose() {
     coordinator.dispose();
     sessionManager.dispose();
+    statisticsService.dispose();
     progressService.dispose();
     settingsService.dispose();
     focusService.dispose();
