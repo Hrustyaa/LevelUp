@@ -150,6 +150,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
   List<SelectableApp>? _loadedCatalog;
   bool _appSelectionOpen = false;
   bool _challengeOpen = false;
+  int _homeRefreshToken = 0;
 
   AppScope? get _scope => widget.scope ?? AppScope.maybeOf(context);
 
@@ -272,11 +273,22 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _scope?.refresh();
+      _refreshScopeAndBumpToken();
       _checkChallenge();
       if (_onboardingCompleted) {
         _ensureCatalogLoaded(forceRefresh: true);
       }
+    }
+  }
+
+  Future<void> _refreshScopeAndBumpToken() async {
+    final scope = _scope;
+    if (scope == null) return;
+    try {
+      await scope.refresh();
+    } catch (_) {}
+    if (mounted) {
+      setState(() => _homeRefreshToken++);
     }
   }
 
@@ -324,7 +336,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
           ),
         );
         await scope.refresh();
-        if (mounted) setState(() {});
+        if (mounted) setState(() => _homeRefreshToken++);
       } catch (_) {
         // Normal resume without pending native gate request, or ineligible state.
       } finally {
@@ -610,13 +622,40 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
         ),
       );
       await scope.refresh();
-      if (mounted) setState(() {});
+      if (mounted) setState(() => _homeRefreshToken++);
     } finally {
       _challengeOpen = false;
     }
   }
 
+  Future<void> _updateSoundFeedback(bool enabled) async {
+    final scope = _scope;
+    if (scope == null) return;
+    final current = scope.settingsService.currentState.settings;
+    final next = await scope.settingsService.updateSettings(
+      current.copyWith(soundFeedbackEnabled: enabled),
+    );
+    if (next.errorMessage != null) {
+      throw StateError(next.errorMessage!);
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _updateDiagnosticLogging(bool enabled) async {
+    final scope = _scope;
+    if (scope == null) return;
+    final current = scope.settingsService.currentState.settings;
+    final next = await scope.settingsService.updateSettings(
+      current.copyWith(diagnosticLoggingEnabled: enabled),
+    );
+    if (next.errorMessage != null) {
+      throw StateError(next.errorMessage!);
+    }
+    if (mounted) setState(() {});
+  }
+
   Widget _buildHomeScreen() {
+    final settings = _scope?.settingsService.currentState.settings;
     return LevelUpHomeScreen(
       gateway: _focusGateway,
       language: _toDashboardLanguage(_language),
@@ -626,6 +665,12 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
       focusDraft: _focusSetupDraft,
       capabilities: const FocusCapabilities(),
       onSaveFocusDraft: _saveFocusDraft,
+      refreshToken: _homeRefreshToken,
+      soundFeedbackEnabled: settings?.soundFeedbackEnabled,
+      diagnosticLoggingEnabled: settings?.diagnosticLoggingEnabled,
+      onSoundFeedbackChanged: _scope != null ? _updateSoundFeedback : null,
+      onDiagnosticLoggingChanged:
+          _scope != null ? _updateDiagnosticLogging : null,
       logoAsset: 'assets/images/levelup_mark.png',
       onEditFocus: () async {
         await _openManageApps();
@@ -722,6 +767,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
         ),
       ),
     );
+    await _refreshScopeAndBumpToken();
   }
 
   Future<void> _handleEnableFocus() async {

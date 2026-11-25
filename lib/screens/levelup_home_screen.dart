@@ -37,6 +37,11 @@ class LevelUpHomeScreen extends StatefulWidget {
     this.onNotifications,
     this.onLanguageChanged,
     this.onBreakCompleted,
+    this.refreshToken = 0,
+    this.soundFeedbackEnabled,
+    this.diagnosticLoggingEnabled,
+    this.onSoundFeedbackChanged,
+    this.onDiagnosticLoggingChanged,
     this.demo = false,
     this.logoAsset = 'assets/images/levelup_mark.png',
   });
@@ -58,6 +63,10 @@ class LevelUpHomeScreen extends StatefulWidget {
       onNotifications;
   final ValueChanged<DashboardLanguage>? onLanguageChanged;
   final ValueChanged<DateTime>? onBreakCompleted;
+  final int refreshToken;
+  final bool? soundFeedbackEnabled, diagnosticLoggingEnabled;
+  final Future<void> Function(bool)? onSoundFeedbackChanged,
+      onDiagnosticLoggingChanged;
   final bool demo;
   @override
   State<LevelUpHomeScreen> createState() => _HomeState();
@@ -104,6 +113,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     }
     if (oldWidget.gateway != widget.gateway ||
         oldWidget.loadInsights != widget.loadInsights ||
+        oldWidget.refreshToken != widget.refreshToken ||
         !setEquals(oldWidget.draftIds, widget.draftIds)) {
       _refresh();
     }
@@ -2379,6 +2389,28 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
   List<Widget> _progress() => [
     _title(tr('Your progress', 'Твой прогресс', 'Ілгерілеуің'), 26),
     _gap(),
+    if (_insights.todayWorkouts != null || _insights.todayUnlocks != null) ...[
+      Row(
+        children: [
+          Expanded(
+            child: _metric(
+              Icons.fitness_center_rounded,
+              _insights.todayWorkouts?.toString() ?? '—',
+              tr('Workouts today', 'Тренировок сегодня', 'Бүгінгі жаттығулар'),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _metric(
+              Icons.lock_open_rounded,
+              _insights.todayUnlocks?.toString() ?? '—',
+              tr('Unlocks today', 'Разблокировок сегодня', 'Бүгінгі ашулар'),
+            ),
+          ),
+        ],
+      ),
+      _gap(),
+    ],
     _levelCard(onTap: _openLevel),
     _gap(),
     _section(tr('Screen time', 'Экранное время', 'Экран уақыты')),
@@ -2453,6 +2485,56 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       ),
     ),
     _gap(10),
+    if (widget.onSoundFeedbackChanged != null ||
+        widget.onDiagnosticLoggingChanged != null) ...[
+      _card(
+        Column(
+          children: [
+            if (widget.onSoundFeedbackChanged != null &&
+                widget.soundFeedbackEnabled != null)
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: widget.soundFeedbackEnabled!,
+                activeThumbColor: _lime,
+                title: Text(
+                  tr(
+                    'Sound & haptic feedback',
+                    'Звук и виброотклик',
+                    'Дыбыс және діріл',
+                  ),
+                ),
+                onChanged: _busy
+                    ? null
+                    : (v) => _action(() => widget.onSoundFeedbackChanged!(v)),
+              ),
+            if (widget.onSoundFeedbackChanged != null &&
+                widget.soundFeedbackEnabled != null &&
+                widget.onDiagnosticLoggingChanged != null &&
+                widget.diagnosticLoggingEnabled != null)
+              const Divider(height: 1),
+            if (widget.onDiagnosticLoggingChanged != null &&
+                widget.diagnosticLoggingEnabled != null)
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: widget.diagnosticLoggingEnabled!,
+                activeThumbColor: _lime,
+                title: Text(
+                  tr(
+                    'Diagnostic logging',
+                    'Журнал диагностики',
+                    'Диагностика журналы',
+                  ),
+                ),
+                onChanged: _busy
+                    ? null
+                    : (v) =>
+                          _action(() => widget.onDiagnosticLoggingChanged!(v)),
+              ),
+          ],
+        ),
+      ),
+      _gap(10),
+    ],
     _note(
       tr(
         'Additional settings will appear when their features are connected.',
@@ -2532,11 +2614,10 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       'Пауза завершена',
       'Үзіліс аяқталды',
     ),
-    ActivityKind.movementCompleted => tr(
-      'Movement completed',
-      'Задание завершено',
-      'Тапсырма аяқталды',
-    ),
+    ActivityKind.movementCompleted =>
+      e.appName == null
+          ? tr('Movement completed', 'Задание завершено', 'Тапсырма аяқталды')
+          : '${e.appName} · ${tr('challenge completed', 'задание выполнено', 'тапсырма орындалды')}',
   };
   Widget _event(ActivityEntry e) => Row(
     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2571,6 +2652,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
                     .formatShortDate(e.at.toLocal()),
                 MaterialLocalizations.of(context)
                     .formatTimeOfDay(TimeOfDay.fromDateTime(e.at.toLocal())),
+                if (e.detail != null) e.detail!,
                 if (e.minutes != null) _minutes(e.minutes),
               ].join(' · '),
               12,

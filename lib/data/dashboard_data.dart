@@ -185,11 +185,12 @@ class ActivityEntry {
     this.appName,
     this.minutes,
     this.xp,
+    this.detail,
   });
   final String id;
   final ActivityKind kind;
   final DateTime at;
-  final String? appName;
+  final String? appName, detail;
   final int? minutes, xp;
 }
 
@@ -205,6 +206,7 @@ class DashboardInsights {
   const DashboardInsights({
     this.todayUsageMinutes,
     this.todayUnlocks,
+    this.todayWorkouts,
     this.totalXp,
     this.week = const [],
     this.events = const [],
@@ -213,7 +215,7 @@ class DashboardInsights {
   });
 
   /// null means unknown/unavailable, not zero. No estimated savings.
-  final int? todayUsageMinutes, todayUnlocks, totalXp;
+  final int? todayUsageMinutes, todayUnlocks, todayWorkouts, totalXp;
   final List<UsageDay> week;
   final List<ActivityEntry> events;
   final Map<String, int> usageByApp;
