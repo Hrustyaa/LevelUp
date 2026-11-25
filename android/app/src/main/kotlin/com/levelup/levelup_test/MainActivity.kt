@@ -23,8 +23,10 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         val messenger = flutterEngine.dartExecutor.binaryMessenger
+        LevelUpFocusNotificationsChannel.register(applicationContext, messenger)
         permissionsBridge = LevelUpPermissionsChannel(this, messenger, ::isServiceEnabled)
         AppCatalogChannel.register(applicationContext, messenger, allowedTargets)
+        LevelUpUsageChannel.register(applicationContext, messenger, allowedTargets)
         MethodChannel(messenger, channelName)
             .setMethodCallHandler { call, result ->
                 when (call.method) {

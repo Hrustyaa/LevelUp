@@ -14,13 +14,24 @@ class AndroidUsageGateway {
         packageIds.isEmpty) {
       return null;
     }
-    return _channel.invokeMapMethod<String, Object?>('getScreenTime', {
-      'packageIds': packageIds.toList(growable: false),
-    });
+    try {
+      return await _channel.invokeMapMethod<String, Object?>('getScreenTime', {
+        'packageIds': packageIds.toList(growable: false),
+      });
+    } on PlatformException catch (error) {
+      if (error.code == 'USAGE_DENIED') return null;
+      rethrow;
+    }
   }
 
   Future<DashboardInsights> read(Set<String> packageIds) async {
-    final data = await readUsageData(packageIds);
+    Map<String, Object?>? data;
+    try {
+      data = await readUsageData(packageIds);
+    } on MissingPluginException {
+      // Keep Home available when the optional native usage bridge is absent.
+      return const DashboardInsights();
+    }
     if (data == null) return const DashboardInsights();
 
     final today = data['todayMs'];

@@ -1,5 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Usage Access is granted manually in Android Special App Access. -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
+    <!-- Runtime permission on Android 13+; optional for Focus status notifications. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!-- Only the three explicit test targets; no all-packages permission. -->
@@ -11,7 +15,7 @@
 
     <application
         android:name="${applicationName}"
-        android:label="LevelUp Test"
+        android:label="LevelUp"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
@@ -33,7 +37,7 @@
             android:name=".LevelUpAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="true"
-            android:label="LevelUp Test — voluntary app gate"
+            android:label="LevelUp Focus"
             android:description="@string/a11y_description">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />

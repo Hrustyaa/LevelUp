@@ -358,12 +358,8 @@ class _PermissionsState extends State<LevelUpPermissionsScreen>
       LevelUpPermission.usage => Icons.bar_chart_rounded,
       LevelUpPermission.notifications => Icons.notifications_none_rounded,
     };
-    final disableMotion = MediaQuery.disableAnimationsOf(context);
-    final action = AnimatedSwitcher(
-      duration: disableMotion
-          ? Duration.zero
-          : const Duration(milliseconds: 200),
-      child: _busy == p
+    final action = Builder(
+      builder: (context) => _busy == p
           ? const SizedBox(
               key: ValueKey('loading'),
               width: 20,

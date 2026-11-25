@@ -482,6 +482,12 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
       onPermissions: () async {
         await _openAppPermissions();
       },
+      onNotifications: () async {
+        // Opens Android Settings; this does not claim notifications are implemented.
+        await const AndroidPermissionGateway().openPermissionSettings(
+          LevelUpPermission.notifications,
+        );
+      },
       onEnableFocus: () async {
         await _handleEnableFocus();
       },
