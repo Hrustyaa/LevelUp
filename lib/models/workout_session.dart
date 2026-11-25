@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../features/challenge/application/push_up_verification.dart';
 import 'challenge_type.dart';
 import 'exercise_type.dart';
 import 'workout_result.dart';
@@ -91,7 +92,7 @@ class WorkoutSession {
     final isUnlock = challengeContext == ChallengeType.unlockChallenge;
     final resolvedSource = source ??
         (exerciseType == ExerciseType.pushUp
-            ? 'experimental_unverified'
+            ? PushUpVerification.experimentalSource
             : 'camera');
 
     return WorkoutResult(
@@ -106,7 +107,12 @@ class WorkoutSession {
       completedAt: completedAt ?? DateTime.now(),
       eligibleForAccess: isUnlock,
       accessDurationSeconds: isUnlock ? accessDurationSeconds : 0,
-      earnedXp: xpReward,
+      earnedXp: resolvedSource == 'simulated' ||
+              (exerciseType == ExerciseType.pushUp &&
+                  (!PushUpVerification.physicallyValidated ||
+                      resolvedSource != PushUpVerification.verifiedSource))
+          ? 0
+          : xpReward,
       source: resolvedSource,
     );
   }

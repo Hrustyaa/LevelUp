@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
+
 import '../../features/pose_detection/application/push_up_counter.dart';
 import '../../features/pose_detection/application/squat_counter.dart';
 
@@ -38,7 +40,7 @@ class PoseEngineAdapter implements IPoseEventSource {
 
   /// Processes a single knee angle measurement and emits the evaluated result.
   SquatCounterResult processAngle(double? angle, {bool? isSimulated}) {
-    final simulatedFlag = isSimulated ?? this.isSimulated;
+    final simulatedFlag = this.isSimulated || (isSimulated ?? false);
     final result = _counter.processAngle(angle, isSimulated: simulatedFlag);
     if (!_controller.isClosed) {
       _controller.add(result);
@@ -57,13 +59,13 @@ class PoseEngineAdapter implements IPoseEventSource {
   }
 }
 
-/// Adapter that processes elbow angles through a [PushUpCounter] and exposes
+/// Adapter that processes push-up poses through a [PushUpCounter] and exposes
 /// the results as an [IPoseEventSource].
 ///
 /// Used when the active exercise is [ExerciseType.pushUp]. The coordinator
 /// consumes [SquatCounterResult] in both cases because the state machine
 /// structure is identical (top/bottom phases, repetition count, feedback).
-class PushUpPoseAdapter implements IPoseEventSource {
+final class PushUpPoseAdapter implements IPoseEventSource {
   final PushUpCounter _counter;
   final StreamController<SquatCounterResult> _controller =
       StreamController<SquatCounterResult>.broadcast();
@@ -79,13 +81,13 @@ class PushUpPoseAdapter implements IPoseEventSource {
   @override
   Stream<SquatCounterResult> get poseStream => _controller.stream;
 
-  /// Processes a single elbow angle measurement and emits the evaluated result.
-  SquatCounterResult processAngle(double? angle, {bool? isSimulated}) {
-    final simulatedFlag = isSimulated ?? this.isSimulated;
-    final result = _counter.processAngle(angle, isSimulated: simulatedFlag);
-    if (!_controller.isClosed) {
-      _controller.add(result);
-    }
+  SquatCounterResult processPose(Pose? pose, {required DateTime timestamp}) {
+    final result = _counter.processPose(
+      pose,
+      timestamp: timestamp,
+      isSimulated: isSimulated,
+    );
+    if (!_controller.isClosed) _controller.add(result);
     return result;
   }
 

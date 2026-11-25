@@ -20,6 +20,8 @@ class ProductionChallengeScreen extends StatefulWidget {
   final String appName;
   final String language;
   final FocusExercise? exercise;
+  final ExerciseType exerciseType;
+  final String? unlockSessionId;
   final ProductionChallengeController? controllerOverride;
 
   const ProductionChallengeScreen({
@@ -29,6 +31,8 @@ class ProductionChallengeScreen extends StatefulWidget {
     required this.appName,
     this.language = 'ru',
     this.exercise,
+    this.exerciseType = ExerciseType.squats,
+    this.unlockSessionId,
     this.controllerOverride,
   });
 
@@ -39,125 +43,35 @@ class ProductionChallengeScreen extends StatefulWidget {
 
 class _ProductionChallengeScreenState extends State<ProductionChallengeScreen>
     with WidgetsBindingObserver {
-  late ProductionChallengeController _controller;
-  late bool _ownsController;
-  late FocusExercise _exercise;
-
-  /// Selected exercise for Free Workout (squats by default, overridable before
-  /// the session starts). Always squats for unlock challenges.
-  late ExerciseType _selectedExercise;
-
-  /// True once the camera/tracking is live — locks exercise selection.
-  bool _sessionStarted = false;
-
-  /// Serializes exercise switches so rapid taps during camera initialization
-  /// always converge on the latest selection without controller leaks.
-  bool _isSwitchingExercise = false;
-  ExerciseType? _queuedExercise;
+  late final ProductionChallengeController _controller;
+  late final FocusExercise _exercise;
+  bool _closing = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-
-    // Resolve preferred exercise from persisted settings (Free Workout only).
-    if (!widget.isUnlockChallenge && widget.controllerOverride == null) {
-      _selectedExercise = widget.scope.settingsService.currentState.settings
-          .preferredExerciseType;
-    } else {
-      _selectedExercise = ExerciseType.squats;
-    }
-
-    _exercise = widget.exercise ?? _resolveDisplayExercise(_selectedExercise);
-
-    _buildController();
+    _controller =
+        widget.controllerOverride ??
+        ProductionChallengeController(
+          coordinator: widget.scope.coordinator,
+          cameraPermissionChecker: widget.scope.cameraChecker,
+          nativeBridge: widget.scope.nativeBridge,
+          isUnlockChallenge: widget.isUnlockChallenge,
+          exerciseType: widget.exerciseType,
+          unlockSessionId: widget.unlockSessionId,
+          language: widget.language,
+        );
+    final id = _controller.exerciseType == ExerciseType.pushUp
+        ? FocusExerciseId.pushUp
+        : FocusExerciseId.squat;
+    _exercise = widget.exercise ?? exerciseById(id)!;
     _controller.addListener(_onControllerChanged);
     unawaited(_controller.start());
   }
 
-  FocusExercise _resolveDisplayExercise(ExerciseType type) {
-    final id = type == ExerciseType.pushUp
-        ? FocusExerciseId.pushUp
-        : FocusExerciseId.squat;
-    return exerciseById(id) ??
-        focusExercises.firstWhere((e) => e.id == FocusExerciseId.squat);
-  }
-
-  /// Creates (or reuses) a [ProductionChallengeController] for [_selectedExercise].
-  void _buildController() {
-    if (widget.controllerOverride != null) {
-      _controller = widget.controllerOverride!;
-      _ownsController = false;
-    } else {
-      _controller = ProductionChallengeController(
-        coordinator: widget.scope.coordinator,
-        cameraPermissionChecker: widget.scope.cameraChecker,
-        nativeBridge: widget.scope.nativeBridge,
-        isUnlockChallenge: widget.isUnlockChallenge,
-        exerciseType: widget.isUnlockChallenge
-            ? ExerciseType.squats
-            : _selectedExercise,
-        language: widget.language,
-      );
-      _ownsController = true;
-    }
-  }
-
-  /// Called when the user picks a different exercise before the session locks.
-  Future<void> _changeExercise(ExerciseType type) async {
-    if (_sessionStarted || !_ownsController || widget.isUnlockChallenge) return;
-    if (type == _selectedExercise && !_isSwitchingExercise) return;
-
-    _queuedExercise = type;
-    if (_isSwitchingExercise) return;
-    _isSwitchingExercise = true;
-
-    try {
-      while (_queuedExercise != null && mounted && !_sessionStarted) {
-        final target = _queuedExercise!;
-        _queuedExercise = null;
-        if (target == _selectedExercise &&
-            _controller.exerciseType == target) {
-          continue;
-        }
-
-        // Immediately reflect selection in UI so display stays synchronized.
-        setState(() {
-          _selectedExercise = target;
-          _exercise = widget.exercise ?? _resolveDisplayExercise(target);
-        });
-
-        await widget.scope.settingsService.updatePreferredExercise(target);
-        if (!mounted || _sessionStarted) break;
-
-        _controller.removeListener(_onControllerChanged);
-        await _controller.cancel();
-        _controller.dispose();
-        if (!mounted) break;
-
-        setState(() {
-          _buildController();
-          _sessionStarted = false;
-        });
-
-        _controller.addListener(_onControllerChanged);
-        unawaited(_controller.start());
-      }
-    } finally {
-      _isSwitchingExercise = false;
-    }
-  }
-
   void _onControllerChanged() {
-    if (mounted) {
-      setState(() {
-        // Lock exercise selection once tracking or reps are active.
-        if ((_controller.trackingReady || _controller.repetitions > 0) &&
-            !_sessionStarted) {
-          _sessionStarted = true;
-        }
-      });
-    }
+    if (mounted) setState(() {});
   }
 
   @override
@@ -166,6 +80,8 @@ class _ProductionChallengeScreenState extends State<ProductionChallengeScreen>
   }
 
   Future<void> _handleCancel() async {
+    if (_closing || _controller.isFinalizing) return;
+    _closing = true;
     await _controller.cancel();
     if (mounted) {
       Navigator.of(context).pop();
@@ -176,57 +92,10 @@ class _ProductionChallengeScreenState extends State<ProductionChallengeScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _controller.removeListener(_onControllerChanged);
-    if (_ownsController) {
+    if (widget.controllerOverride == null) {
       _controller.dispose();
     }
     super.dispose();
-  }
-
-  String _exerciseLabel(ExerciseType type) {
-    switch (type) {
-      case ExerciseType.squats:
-        return focusTr(widget.language, 'Приседания', 'Squats', 'Отырып-тұру');
-      case ExerciseType.pushUp:
-        return focusTr(widget.language, 'Отжимания', 'Push-ups', 'Жатып тіреліс');
-    }
-  }
-
-  /// Compact exercise selector shown in Free Workout before tracking locks in.
-  Widget _buildExerciseSelector() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          for (final type in [ExerciseType.squats, ExerciseType.pushUp]) ...[
-            if (type != ExerciseType.squats) const SizedBox(width: 8),
-            ChoiceChip(
-              label: Text(_exerciseLabel(type)),
-              selected: _selectedExercise == type,
-              onSelected: _sessionStarted
-                  ? null
-                  : (selected) {
-                      if (selected) unawaited(_changeExercise(type));
-                    },
-              selectedColor: FocusStyle.accent,
-              labelStyle: TextStyle(
-                color: _selectedExercise == type
-                    ? FocusStyle.background
-                    : FocusStyle.text,
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-              ),
-              backgroundColor: FocusStyle.surface,
-              side: BorderSide(
-                color: _selectedExercise == type
-                    ? FocusStyle.accent
-                    : FocusStyle.muted,
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
   }
 
   @override
@@ -237,14 +106,14 @@ class _ProductionChallengeScreenState extends State<ProductionChallengeScreen>
         accessMinutes: _controller.grantedMinutes,
         language: widget.language,
         onDone: () {
-          widget.scope.coordinator.releaseTerminalSession();
+          _controller.releaseCompletedSession();
           Navigator.of(context).pop();
         },
       );
     }
 
     if (_controller.isFreeWorkoutCompleted) {
-      final exerciseName = _selectedExercise == ExerciseType.pushUp
+      final exerciseName = _controller.exerciseType == ExerciseType.pushUp
           ? focusTr(widget.language, 'отжиманий', 'push-ups', 'жатып тіреліс')
           : focusTr(widget.language, 'приседаний', 'squats', 'отырып-тұру');
       return Theme(
@@ -293,7 +162,7 @@ class _ProductionChallengeScreenState extends State<ProductionChallengeScreen>
                   FocusPrimaryButton(
                     text: focusTr(widget.language, 'Готово', 'Done', 'Дайын'),
                     onPressed: () {
-                      widget.scope.coordinator.releaseTerminalSession();
+                      _controller.releaseCompletedSession();
                       Navigator.of(context).pop();
                     },
                   ),
@@ -309,27 +178,25 @@ class _ProductionChallengeScreenState extends State<ProductionChallengeScreen>
     final Widget? preview = _controller.isFinalizing
         ? null
         : camera != null && camera.value.isInitialized
-            ? Stack(
-                fit: StackFit.passthrough,
-                children: [
-                  CameraPreview(camera),
-                  Positioned.fill(
-                    child: PoseOverlayWidget(
-                      listenable: _controller.poseOverlayListenable,
-                    ),
-                  ),
-                ],
-              )
-            : _controller.error != null
-                ? const Icon(Icons.no_photography_outlined)
-                : const CircularProgressIndicator();
+        ? Stack(
+            fit: StackFit.passthrough,
+            children: [
+              CameraPreview(camera),
+              Positioned.fill(
+                child: PoseOverlayWidget(
+                  listenable: _controller.poseOverlayListenable,
+                ),
+              ),
+            ],
+          )
+        : _controller.error != null
+        ? const Icon(Icons.no_photography_outlined)
+        : const CircularProgressIndicator();
 
     return PopScope(
-      canPop: !_controller.isFinalizing,
+      canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop) {
-          unawaited(_controller.cancel());
-        }
+        if (!didPop) unawaited(_handleCancel());
       },
       child: FocusChallengeScreen(
         exercise: _exercise,
@@ -341,14 +208,10 @@ class _ProductionChallengeScreenState extends State<ProductionChallengeScreen>
         hint: _controller.hint,
         error: _controller.error,
         onCancel: _controller.isFinalizing ? null : _handleCancel,
-        onRetry:
-            _controller.canRetry ? () => unawaited(_controller.retry()) : null,
-        // Exercise selector for Free Workout only, injected as header content.
-        headerExtra: !widget.isUnlockChallenge && widget.controllerOverride == null
-            ? _buildExerciseSelector()
+        onRetry: _controller.canRetry
+            ? () => unawaited(_controller.retry())
             : null,
       ),
     );
   }
 }
-

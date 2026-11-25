@@ -1,5 +1,6 @@
 import '../../../models/challenge_definition.dart';
 import '../../../models/exercise_type.dart';
+import '../application/push_up_verification.dart';
 
 /// Centralized catalog containing all valid challenge definitions in LevelUp.
 ///
@@ -14,6 +15,18 @@ abstract final class ChallengeCatalog {
 
   /// Challenge ID for the standard 5-push-up voluntary free workout.
   static const String pushUpFreeWorkoutId = 'pushup_free_5';
+
+  static const String pushUpUnlockId = 'pushup_unlock_5';
+
+  static const ChallengeDefinition pushUpUnlockChallenge = ChallengeDefinition(
+    challengeId: pushUpUnlockId,
+    exerciseType: ExerciseType.pushUp,
+    title: '5 Push-ups Unlock',
+    description: 'Complete 5 front-facing push-ups for 5 minutes of access.',
+    targetRepetitions: 5,
+    accessDurationSeconds: 300,
+    optionalXpReward: 50,
+  );
 
   /// Default 5-squat unlock challenge granting 5 calendar minutes of access.
   static const ChallengeDefinition squatUnlockChallenge = ChallengeDefinition(
@@ -56,6 +69,7 @@ abstract final class ChallengeCatalog {
     squatUnlockChallenge,
     squatFreeWorkout,
     pushUpFreeWorkout,
+    if (PushUpVerification.unlockEnabled) pushUpUnlockChallenge,
   ];
 
   /// Fast lookup map by challengeId.

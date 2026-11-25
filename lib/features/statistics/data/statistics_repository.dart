@@ -1,5 +1,6 @@
 import '../../../data/database/database_constants.dart';
 import '../../../data/database/levelup_database.dart';
+import '../../challenge/application/push_up_verification.dart';
 import '../application/statistics_calendar.dart';
 import '../models/access_duration_statistics.dart';
 import '../models/daily_activity_stats.dart';
@@ -31,9 +32,27 @@ class SqliteStatisticsRepository implements IStatisticsRepository {
   SqliteStatisticsRepository({LevelUpDatabase? databaseManager})
       : _dbManager = databaseManager ?? LevelUpDatabase();
 
-  static const String _trustedWorkoutFilter =
+  static const String _legacySquatSourceFilter =
       "(${DatabaseConstants.colVerificationSource} IS NULL OR "
-      "${DatabaseConstants.colVerificationSource} NOT IN ('simulated', 'preview', 'ui_only', 'mock', 'experimental_unverified'))";
+      "${DatabaseConstants.colVerificationSource} NOT IN ('simulated', 'preview', 'ui_only', 'mock', 'experimental_unverified', '${PushUpVerification.verifiedSource}'))";
+
+  static const String _trustedWorkoutFilter = """
+    ((${DatabaseConstants.colExerciseType} = 'squats'
+       AND $_legacySquatSourceFilter)
+      OR (${PushUpVerification.physicallyValidated ? 1 : 0} = 1
+       AND ${DatabaseConstants.colExerciseType} = 'pushUp'
+       AND ${DatabaseConstants.colCompletedRepetitions} >= 5
+       AND ${DatabaseConstants.colVerificationSource} IS '${PushUpVerification.verifiedSource}'))
+    """;
+
+  static const String _trustedAccessFilter = """
+    NOT EXISTS (
+      SELECT 1 FROM ${DatabaseConstants.tableWorkoutSessions} AS workout
+      WHERE workout.${DatabaseConstants.colSessionId} =
+            ${DatabaseConstants.tableAccessAttempts}.${DatabaseConstants.colSessionId}
+        AND NOT ($_trustedWorkoutFilter)
+    )
+    """;
 
   @override
   Future<WorkoutStatistics> loadWorkoutStatistics({
@@ -118,6 +137,7 @@ class SqliteStatisticsRepository implements IStatisticsRepository {
         COUNT(DISTINCT ${DatabaseConstants.colSessionId}) AS all_time_confirmed
       FROM ${DatabaseConstants.tableAccessAttempts}
       WHERE ${DatabaseConstants.colState} = 'confirmed'
+        AND $_trustedAccessFilter
       ''',
       [
         day.startUtcMs,
@@ -157,6 +177,7 @@ class SqliteStatisticsRepository implements IStatisticsRepository {
         COUNT(DISTINCT ${DatabaseConstants.colSessionId}) AS confirmed_count
       FROM ${DatabaseConstants.tableAccessAttempts}
       WHERE ${DatabaseConstants.colState} = 'confirmed'
+        AND $_trustedAccessFilter
       ''',
       [
         day.startUtcMs,
@@ -211,6 +232,7 @@ class SqliteStatisticsRepository implements IStatisticsRepository {
           $effectiveTs AS effective_at
         FROM ${DatabaseConstants.tableAccessAttempts}
         WHERE ${DatabaseConstants.colState} = 'confirmed'
+          AND $_trustedAccessFilter
           AND $effectiveTs >= ?
           AND $effectiveTs < ?
         ''',

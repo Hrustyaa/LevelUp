@@ -17,7 +17,6 @@ class FocusChallengeScreen extends StatelessWidget {
     this.hint,
     this.error,
     this.onRetry,
-    this.headerExtra,
   });
 
   final FocusExercise exercise;
@@ -27,9 +26,6 @@ class FocusChallengeScreen extends StatelessWidget {
   final VoidCallback? onCancel, onRetry;
   final String language;
   final String? hint, error;
-
-  /// Optional widget inserted below the progress bar (e.g. exercise selector).
-  final Widget? headerExtra;
 
   @override
   Widget build(BuildContext context) {
@@ -95,7 +91,6 @@ class FocusChallengeScreen extends StatelessWidget {
                   borderRadius: BorderRadius.circular(4),
                 ),
                 const SizedBox(height: 16),
-                ?headerExtra,
                 if (cameraPreview != null)
                   ClipRRect(
                     borderRadius: BorderRadius.circular(16),
@@ -277,11 +272,13 @@ class FocusExerciseSettingsScreen extends StatefulWidget {
     super.key,
     required this.initialSelection,
     required this.onSave,
+    this.allowPushUpUnlock = false,
     this.language = 'ru',
   });
 
   final Set<FocusExerciseId> initialSelection;
   final ValueChanged<Set<FocusExerciseId>> onSave;
+  final bool allowPushUpUnlock;
   final String language;
 
   @override
@@ -293,7 +290,9 @@ class _FocusExerciseSettingsState extends State<FocusExerciseSettingsScreen> {
   late Set<FocusExerciseId> selected = widget.initialSelection
       .where(
         (id) => focusExercises.any(
-          (exercise) => exercise.id == id && exercise.ready,
+          (exercise) =>
+              exercise.id == id &&
+              exercise.canUnlock(allowPushUpUnlock: widget.allowPushUpUnlock),
         ),
       )
       .toSet();
@@ -302,6 +301,9 @@ class _FocusExerciseSettingsState extends State<FocusExerciseSettingsScreen> {
   Widget build(BuildContext context) {
     String t(String ru, String en, String kk) =>
         focusTr(widget.language, ru, en, kk);
+    final exercises = focusExercises
+        .where((exercise) => isExerciseAvailableForFreeWorkout(exercise.id))
+        .toList(growable: false);
     return Theme(
       data: FocusStyle.theme(),
       child: Scaffold(
@@ -329,10 +331,13 @@ class _FocusExerciseSettingsState extends State<FocusExerciseSettingsScreen> {
                 const SizedBox(height: 24),
                 Expanded(
                   child: ListView.separated(
-                    itemCount: focusExercises.length,
+                    itemCount: exercises.length,
                     separatorBuilder: (_, _) => const SizedBox(height: 9),
                     itemBuilder: (context, index) {
-                      final exercise = focusExercises[index];
+                      final exercise = exercises[index];
+                      final enabled = exercise.canUnlock(
+                        allowPushUpUnlock: widget.allowPushUpUnlock,
+                      );
                       final checked = selected.contains(exercise.id);
                       return Material(
                         color: FocusStyle.surface,
@@ -351,19 +356,23 @@ class _FocusExerciseSettingsState extends State<FocusExerciseSettingsScreen> {
                           ),
                           controlAffinity: ListTileControlAffinity.trailing,
                           title: Text(
-                            exercise.name(widget.language),
+                            '${exercise.name(widget.language)} · ${exercise.target} ${t('повторений', 'reps', 'рет')}',
                             style: TextStyle(
-                              color: exercise.ready
+                              color: enabled
                                   ? FocusStyle.text
                                   : FocusStyle.muted,
                               fontSize: 15,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
-                          subtitle: exercise.ready
+                          subtitle: enabled
                               ? null
                               : Text(
-                                  t('Скоро', 'Coming soon', 'Жақында'),
+                                  t(
+                                    'Разблокировка недоступна в этой сборке',
+                                    'Unlock unavailable in this build',
+                                    'Бұл нұсқада рұқсат ашылмайды',
+                                  ),
                                   style: const TextStyle(
                                     color: FocusStyle.muted,
                                     fontSize: 12,
@@ -376,7 +385,7 @@ class _FocusExerciseSettingsState extends State<FocusExerciseSettingsScreen> {
                             width: 1.5,
                           ),
                           value: checked,
-                          onChanged: exercise.ready
+                          onChanged: enabled
                               ? (value) => setState(() {
                                   if (value == true) {
                                     selected.add(exercise.id);

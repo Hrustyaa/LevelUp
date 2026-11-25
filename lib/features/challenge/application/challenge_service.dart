@@ -5,6 +5,7 @@ import '../../../models/challenge_request.dart';
 import '../../../models/challenge_type.dart';
 import '../../../models/exercise_type.dart';
 import '../data/challenge_catalog.dart';
+import 'push_up_verification.dart';
 
 export '../../../core/errors/challenge_exceptions.dart';
 export '../../../models/challenge_definition.dart';
@@ -33,7 +34,10 @@ abstract class IChallengeService {
   ///
   /// [targetPackage] must be in [ChannelConstants.allowedTargets].
   /// Throws [UnsupportedChallengeTargetException] if [targetPackage] is invalid.
-  ChallengeRequest createUnlockChallengeRequest(String targetPackage);
+  ChallengeRequest createUnlockChallengeRequest(
+    String targetPackage, {
+    ExerciseType exerciseType = ExerciseType.squats,
+  });
 
   /// Creates and validates a new free workout challenge request.
   ChallengeRequest createFreeWorkoutRequest({
@@ -96,15 +100,24 @@ class ChallengeService implements IChallengeService {
   }
 
   @override
-  ChallengeRequest createUnlockChallengeRequest(String targetPackage) {
+  ChallengeRequest createUnlockChallengeRequest(
+    String targetPackage, {
+    ExerciseType exerciseType = ExerciseType.squats,
+  }) {
     if (!ChannelConstants.allowedTargets.contains(targetPackage)) {
       throw UnsupportedChallengeTargetException(targetPackage);
     }
 
-    final defaultUnlock = getDefaultUnlockChallenge();
+    if (exerciseType == ExerciseType.pushUp && !PushUpVerification.unlockEnabled) {
+      throw const InvalidChallengeRequestException('Push-up unlocking is disabled.');
+    }
+
+    final challenge = exerciseType == ExerciseType.pushUp
+        ? getChallengeDefinition(ChallengeCatalog.pushUpUnlockId)
+        : getDefaultUnlockChallenge();
     final request = ChallengeRequest(
       requestId: _idGenerator(),
-      challengeId: defaultUnlock.challengeId,
+      challengeId: challenge.challengeId,
       context: ChallengeType.unlockChallenge,
       targetPackage: targetPackage,
       createdAt: _clock(),
@@ -142,6 +155,12 @@ class ChallengeService implements IChallengeService {
     request.validate();
 
     // 3. Verify context alignment
+    if (request.isUnlock &&
+        definition.exerciseType == ExerciseType.pushUp &&
+        !PushUpVerification.unlockEnabled) {
+      throw const InvalidChallengeRequestException('Push-up unlocking is disabled.');
+    }
+
     if (request.isUnlock && definition.accessDurationSeconds <= 0) {
       throw InvalidChallengeRequestException(
         'Challenge "${definition.challengeId}" has 0 access duration and cannot be used as an unlock challenge.',

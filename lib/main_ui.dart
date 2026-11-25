@@ -6,14 +6,17 @@ import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app/challenge/production_challenge_screen.dart';
+import 'app/challenge/workout_exercise_screen.dart';
 import 'app/di/app_scope.dart';
 import 'core/constants/channel_constants.dart';
 import 'data/android_app_catalog.dart';
 import 'data/android_usage_gateway.dart';
 import 'data/dashboard_data.dart';
 import 'data/levelup_permissions.dart';
+import 'features/challenge/application/push_up_verification.dart';
 import 'focus_experience/focus_exercises.dart';
 import 'focus_experience/focus_screens.dart';
+import 'models/exercise_type.dart';
 import 'screens/app_permissions_screen.dart';
 import 'screens/levelup_app_selection_screen.dart';
 import 'screens/levelup_focus_setup_screen.dart';
@@ -315,9 +318,26 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
     if (_scope != null) {
       final scope = _scope!;
       try {
+        final preferences = PushUpVerification.unlockEnabled
+            ? FocusExercisePreferences(
+                await SharedPreferences.getInstance(),
+                allowPushUpUnlock: true,
+              )
+            : null;
+        final exercise = preferences?.next();
+        if (!mounted) return;
         final session = await scope.coordinator.launchUnlockChallenge(
+          exerciseType: exercise?.unlockType ?? ExerciseType.squats,
           requirePendingRequest: true,
         );
+        if (!mounted) return;
+        if (exercise != null) {
+          try {
+            await preferences!.recordAssignment(exercise.id);
+          } catch (error) {
+            debugPrint('Could not save the Focus exercise assignment: $error');
+          }
+        }
         if (!mounted) return;
         final target = session.targetPackage;
         final appName =
@@ -330,6 +350,8 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
             builder: (_) => ProductionChallengeScreen(
               scope: scope,
               isUnlockChallenge: true,
+              exerciseType: session.exerciseType,
+              unlockSessionId: session.sessionId,
               appName: appName,
               language: _language.name,
             ),
@@ -395,8 +417,11 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
   }
 
   Future<void> _openExerciseSettings() async {
+    final allowPushUpUnlock =
+        _scope != null && PushUpVerification.unlockEnabled;
     final exercises = FocusExercisePreferences(
       await SharedPreferences.getInstance(),
+      allowPushUpUnlock: allowPushUpUnlock,
     );
     if (!mounted) return;
     final selected = await Navigator.of(context).push<Set<FocusExerciseId>>(
@@ -404,6 +429,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
         builder: (routeContext) => FocusExerciseSettingsScreen(
           language: _language.name,
           initialSelection: exercises.selected,
+          allowPushUpUnlock: allowPushUpUnlock,
           onSave: (selection) => Navigator.of(routeContext).pop(selection),
         ),
       ),
@@ -576,9 +602,9 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
           side: const BorderSide(color: LevelUpColors.border),
         ),
         title: Text(switch (_language) {
-          LevelUpLanguage.en => 'Movement Challenge',
-          LevelUpLanguage.ru => 'Упражнение для разблокировки',
-          LevelUpLanguage.kk => 'Қозғалыс тапсырмасы',
+          LevelUpLanguage.en => 'Workout',
+          LevelUpLanguage.ru => 'Тренировка',
+          LevelUpLanguage.kk => 'Жаттығу',
         }, style: const TextStyle(color: LevelUpColors.text, fontSize: 18)),
         content: Text(switch (_language) {
           LevelUpLanguage.en =>
@@ -611,6 +637,24 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
     if (!mounted || _challengeOpen) return;
     _challengeOpen = true;
     try {
+      final exercise = await Navigator.of(context).push<ExerciseType>(
+        MaterialPageRoute(
+          builder: (_) => WorkoutExerciseScreen(
+            initialExercise: scope.settingsService.currentState.settings
+                .preferredExerciseType,
+            language: _language.name,
+          ),
+        ),
+      );
+      if (exercise == null || !mounted) return;
+
+      // This SQLite preference is independent of the Focus exercise selection.
+      try {
+        await scope.settingsService.updatePreferredExercise(exercise);
+      } catch (error) {
+        debugPrint('Could not save the Free Workout exercise: $error');
+      }
+      if (!mounted) return;
       await Navigator.of(context).push<void>(
         MaterialPageRoute(
           builder: (_) => ProductionChallengeScreen(
@@ -618,6 +662,7 @@ class _WelcomeFlowState extends State<_WelcomeFlow>
             isUnlockChallenge: false,
             appName: '',
             language: _language.name,
+            exerciseType: exercise,
           ),
         ),
       );

@@ -1,6 +1,9 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../../../models/challenge_type.dart';
 import '../../../models/exercise_type.dart';
 import '../../../models/workout_result.dart';
+import '../../challenge/application/push_up_verification.dart';
 
 /// Result of evaluating a [WorkoutResult] against [XpRewardPolicy].
 class XpRewardDecision {
@@ -28,16 +31,32 @@ class XpRewardPolicy {
   static const int defaultBaseWorkoutXp = 50;
   static const int defaultMinimumRepetitions = 5;
   static const Set<String> defaultAllowedSources = {'camera'};
+  static const _unverifiedSources = {
+    'simulated',
+    'preview',
+    'ui_only',
+    'mock',
+    PushUpVerification.experimentalSource,
+  };
 
   final int baseWorkoutXp;
   final int minimumRepetitions;
   final Set<String> allowedSources;
+  final bool _validatedPushUps;
 
   const XpRewardPolicy({
     this.baseWorkoutXp = defaultBaseWorkoutXp,
     this.minimumRepetitions = defaultMinimumRepetitions,
     this.allowedSources = defaultAllowedSources,
-  });
+  }) : _validatedPushUps = PushUpVerification.physicallyValidated;
+
+  /// Exercises the future policy in an isolated test reward ledger.
+  @visibleForTesting
+  const XpRewardPolicy.withValidatedPushUpsForTest()
+    : baseWorkoutXp = defaultBaseWorkoutXp,
+      minimumRepetitions = defaultMinimumRepetitions,
+      allowedSources = defaultAllowedSources,
+      _validatedPushUps = true;
 
   XpRewardDecision evaluate(WorkoutResult result) {
     if (result.sessionId.trim().isEmpty) {
@@ -57,17 +76,15 @@ class XpRewardPolicy {
       );
     }
 
-    if (result.exerciseType != ExerciseType.squats) {
-      return XpRewardDecision(
-        eligible: false,
-        xpAmount: 0,
-        rejectionReason:
-            'Unvalidated exercise type: "${result.exerciseType.name}"',
-      );
-    }
-
     final normalizedSource = result.source.trim().toLowerCase();
-    if (normalizedSource.isEmpty || !allowedSources.contains(normalizedSource)) {
+    final trusted = result.exerciseType == ExerciseType.pushUp
+        ? _validatedPushUps &&
+              normalizedSource == PushUpVerification.verifiedSource
+        : normalizedSource.isNotEmpty &&
+              !_unverifiedSources.contains(normalizedSource) &&
+              allowedSources.contains(normalizedSource) &&
+              normalizedSource != PushUpVerification.verifiedSource;
+    if (!trusted) {
       return XpRewardDecision(
         eligible: false,
         xpAmount: 0,
@@ -80,13 +97,11 @@ class XpRewardPolicy {
       return XpRewardDecision(
         eligible: false,
         xpAmount: 0,
-        rejectionReason: 'Unsupported challenge context: ${result.challengeContext}',
+        rejectionReason:
+            'Unsupported challenge context: ${result.challengeContext}',
       );
     }
 
-    return XpRewardDecision(
-      eligible: true,
-      xpAmount: baseWorkoutXp,
-    );
+    return XpRewardDecision(eligible: true, xpAmount: baseWorkoutXp);
   }
 }

@@ -1,4 +1,5 @@
 import '../../core/errors/persistence_exceptions.dart';
+import '../../features/challenge/application/push_up_verification.dart';
 import '../../features/challenge/data/challenge_catalog.dart';
 import '../../models/challenge_type.dart';
 import '../../models/exercise_type.dart';
@@ -223,6 +224,12 @@ class WorkoutHistoryRepository implements IWorkoutHistoryRepository {
       );
     }
 
+    final source =
+        (row[DatabaseConstants.colVerificationSource] as String?) ?? 'camera';
+    final hasReward = source != 'simulated' &&
+        (parsedExerciseType == ExerciseType.squats ||
+            (PushUpVerification.physicallyValidated &&
+                source == PushUpVerification.verifiedSource));
     return WorkoutResult(
       sessionId: row[DatabaseConstants.colSessionId] as String,
       requestId: (row[DatabaseConstants.colRequestId] as String?) ?? '',
@@ -242,9 +249,8 @@ class WorkoutHistoryRepository implements IWorkoutHistoryRepository {
       eligibleForAccess: isUnlock,
       accessDurationSeconds:
           isUnlock ? (definition?.accessDurationSeconds ?? 300) : 0,
-      earnedXp: definition?.optionalXpReward ?? 50,
-      source:
-          (row[DatabaseConstants.colVerificationSource] as String?) ?? 'camera',
+      earnedXp: hasReward ? definition?.optionalXpReward ?? 50 : 0,
+      source: source,
     );
   }
 
@@ -253,6 +259,7 @@ class WorkoutHistoryRepository implements IWorkoutHistoryRepository {
         a.challengeId == b.challengeId &&
         a.challengeContext == b.challengeContext &&
         a.exerciseType == b.exerciseType &&
+        a.source == b.source &&
         a.targetPackage == b.targetPackage &&
         a.completedRepetitions == b.completedRepetitions &&
         a.duration.inSeconds == b.duration.inSeconds &&

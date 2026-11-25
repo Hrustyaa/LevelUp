@@ -1,5 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../features/challenge/application/push_up_verification.dart';
+import '../models/exercise_type.dart';
 import '../test_kit/squat_counter.dart';
 
 /// Exercise catalogue used by Focus Gate. This file contains NO camera/ML logic.
@@ -23,6 +25,15 @@ class FocusExercise {
   final int target;
   final bool ready;
   final bool isTimed;
+
+  ExerciseType get unlockType =>
+      id == FocusExerciseId.pushUp ? ExerciseType.pushUp : ExerciseType.squats;
+
+  bool canUnlock({bool allowPushUpUnlock = false}) =>
+      ready ||
+      (id == FocusExerciseId.pushUp &&
+          allowPushUpUnlock &&
+          PushUpVerification.unlockEnabled);
 
   String name(String lang) => switch (lang) {
     'en' => nameEn,
@@ -94,9 +105,14 @@ FocusExercise? nextFocusExercise({
   required Set<FocusExerciseId> selected,
   FocusExerciseId? previous,
   List<FocusExercise> catalogue = focusExercises,
+  bool allowPushUpUnlock = false,
 }) {
   final eligible = catalogue
-      .where((exercise) => exercise.ready && selected.contains(exercise.id))
+      .where(
+        (exercise) =>
+            exercise.canUnlock(allowPushUpUnlock: allowPushUpUnlock) &&
+            selected.contains(exercise.id),
+      )
       .toList(growable: false);
   if (eligible.isEmpty) return null;
   final index = eligible.indexWhere((exercise) => exercise.id == previous);
@@ -104,7 +120,12 @@ FocusExercise? nextFocusExercise({
 }
 
 class FocusExercisePreferences {
-  const FocusExercisePreferences(this.preferences);
+  const FocusExercisePreferences(
+    this.preferences, {
+    this.allowPushUpUnlock = false,
+  });
+
+  final bool allowPushUpUnlock;
 
   final SharedPreferences preferences;
   static const _selectionKey = 'levelup.focus.exercise_selection';
@@ -114,7 +135,9 @@ class FocusExercisePreferences {
     final saved = preferences.getStringList(_selectionKey) ?? const [];
     final enabled = {
       for (final exercise in focusExercises)
-        if (exercise.ready && saved.contains(exercise.id.name)) exercise.id,
+        if (exercise.canUnlock(allowPushUpUnlock: allowPushUpUnlock) &&
+            saved.contains(exercise.id.name))
+          exercise.id,
     };
     if (enabled.isNotEmpty) return enabled;
     return {
@@ -127,7 +150,9 @@ class FocusExercisePreferences {
   Future<bool> save(Set<FocusExerciseId> selection) {
     final ready = [
       for (final exercise in focusExercises)
-        if (exercise.ready && selection.contains(exercise.id)) exercise.id.name,
+        if (exercise.canUnlock(allowPushUpUnlock: allowPushUpUnlock) &&
+            selection.contains(exercise.id))
+          exercise.id.name,
     ];
     if (ready.isEmpty) return Future.value(false);
     return preferences.setStringList(_selectionKey, ready);
@@ -137,6 +162,7 @@ class FocusExercisePreferences {
     final last = preferences.getString(_lastAssignmentKey);
     return nextFocusExercise(
       selected: selected,
+      allowPushUpUnlock: allowPushUpUnlock,
       previous: FocusExerciseId.values
           .where((id) => id.name == last)
           .firstOrNull,

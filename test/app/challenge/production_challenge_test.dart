@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,10 +9,13 @@ import 'package:levelup_test/app/challenge/production_challenge_screen.dart';
 import 'package:levelup_test/app/di/app_scope.dart';
 import 'package:levelup_test/core/constants/channel_constants.dart';
 import 'package:levelup_test/core/integration/core_integration_coordinator.dart';
+import 'package:levelup_test/core/integration/pose_event_adapter.dart';
+import 'package:levelup_test/features/pose_detection/application/squat_counter.dart';
 import 'package:levelup_test/data/database/levelup_database.dart';
 import 'package:levelup_test/data/repositories/access_attempt_repository.dart';
 import 'package:levelup_test/data/repositories/workout_history_repository.dart';
 import 'package:levelup_test/features/challenge/application/challenge_service.dart';
+import 'package:levelup_test/features/challenge/application/push_up_verification.dart';
 import 'package:levelup_test/features/challenge/application/workout_session_manager.dart';
 import 'package:levelup_test/features/focus/application/focus_service.dart';
 import 'package:levelup_test/features/settings/application/camera_permission_checker.dart';
@@ -26,6 +31,54 @@ import 'package:levelup_test/services/access_service.dart';
 import 'package:levelup_test/services/native_bridge.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../support/push_up_pose.dart';
+
+class _CountingSquatAdapter extends PoseEngineAdapter {
+  int frames = 0;
+
+  @override
+  SquatCounterResult processAngle(double? angle, {bool? isSimulated}) {
+    frames++;
+    return super.processAngle(angle, isSimulated: isSimulated);
+  }
+}
+
+class _LifecycleCamera extends CameraController {
+  _LifecycleCamera(
+    CameraDescription description, {
+    required this.initializeAfter,
+    required this.onOpened,
+    required this.onClosed,
+  }) : super(description, ResolutionPreset.low);
+
+  final Future<void> initializeAfter;
+  final void Function() onOpened;
+  final void Function() onClosed;
+
+  @override
+  Future<void> initialize() async {
+    onOpened();
+    await initializeAfter;
+    value = value.copyWith(isInitialized: true, previewSize: const Size(640, 480));
+  }
+
+  @override
+  Future<void> startImageStream(void Function(CameraImage) onAvailable) async {
+    value = value.copyWith(isStreamingImages: true);
+  }
+
+  @override
+  Future<void> stopImageStream() async {
+    value = value.copyWith(isStreamingImages: false);
+  }
+
+  @override
+  Future<void> dispose() async {
+    onClosed();
+    await super.dispose();
+  }
+}
 
 class _InMemoryWorkoutHistoryRepo implements IWorkoutHistoryRepository {
   final List<WorkoutResult> saved = [];
@@ -374,6 +427,41 @@ void main() {
       await tester.pump();
     });
 
+    testWidgets('saved Focus push-ups only route to a push-up camera in the enabled build', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'levelup.onboarding.completed': true,
+        'levelup.welcome.language': 'en',
+        'levelup.focus.selected_apps': [ChannelConstants.targetYouTube],
+        'levelup.focus.exercise_selection': ['pushUp'],
+      });
+      final dispatcher = tester.binding.platformDispatcher;
+      dispatcher.accessibilityFeaturesTestValue =
+          const FakeAccessibilityFeatures(disableAnimations: true);
+      addTearDown(dispatcher.clearAccessibilityFeaturesTestValue);
+      cameraChecker.status = CameraPermissionStatus.denied;
+      pendingChallenge = true;
+
+      await tester.pumpWidget(LevelUpIntroDemo(scope: scope));
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pumpAndSettle();
+
+      final expected = PushUpVerification.testUnlockEnabled
+          ? ExerciseType.pushUp
+          : ExerciseType.squats;
+      final screen = tester.widget<ProductionChallengeScreen>(
+        find.byType(ProductionChallengeScreen),
+      );
+      expect(screen.exerciseType, expected);
+      expect(screen.unlockSessionId, scope.coordinator.currentState.sessionId);
+      expect(scope.coordinator.currentState.challenge?.exerciseType, expected);
+      expect(consumeCount, 1);
+      expect(grantCount, 0);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pumpAndSettle();
+    });
+
     testWidgets('2. Missing or stale pending request does not launch challenge', (tester) async {
       SharedPreferences.setMockInitialValues({
         'levelup.onboarding.completed': true,
@@ -591,6 +679,174 @@ void main() {
       );
 
       controller.dispose();
+    });
+
+    test('a stale squat frame and disposal cannot affect the next push-up session', () async {
+      final oldFrame = Completer<List<Pose>>();
+      final squatAdapter = _CountingSquatAdapter();
+      final squatController = ProductionChallengeController(
+        coordinator: scope.coordinator,
+        cameraPermissionChecker: cameraChecker,
+        nativeBridge: scope.nativeBridge,
+        isUnlockChallenge: false,
+        poseAdapter: squatAdapter,
+        availableCamerasOverride: () async => [],
+        poseProcessorOverride: (_) => oldFrame.future,
+      );
+      await squatController.start();
+      final oldSessionId = scope.coordinator.currentState.sessionId!;
+      final inFlight = squatController.processInputImage(_dummyInputImage());
+      await squatController.cancel();
+
+      List<Pose> frame = [];
+      var time = DateTime.utc(2026);
+      final unusedSquatAdapter = _CountingSquatAdapter();
+      addTearDown(unusedSquatAdapter.dispose);
+      final pushController = ProductionChallengeController(
+        coordinator: scope.coordinator,
+        cameraPermissionChecker: cameraChecker,
+        nativeBridge: scope.nativeBridge,
+        isUnlockChallenge: false,
+        exerciseType: ExerciseType.pushUp,
+        poseAdapter: unusedSquatAdapter,
+        language: 'en',
+        availableCamerasOverride: () async => [],
+        poseProcessorOverride: (_) async => frame,
+        clock: () => time,
+      );
+      addTearDown(pushController.dispose);
+      await pushController.start();
+      final currentSessionId = scope.coordinator.currentState.sessionId;
+      expect(currentSessionId, isNot(oldSessionId));
+      expect(scope.coordinator.currentState.challenge?.exerciseType, ExerciseType.pushUp);
+
+      oldFrame.complete([_buildSquatPose(down: true)]);
+      await inFlight;
+      squatController.dispose();
+      await Future<void>.delayed(Duration.zero);
+      expect(squatAdapter.frames, 0);
+      expect(scope.coordinator.currentState.sessionId, currentSessionId);
+      expect(pushController.repetitions, 0);
+
+      Future<void> feed(Pose pose) async {
+        frame = [pose];
+        time = time.add(const Duration(milliseconds: 85));
+        await pushController.processInputImage(_dummyInputImage());
+        await Future<void>.delayed(Duration.zero);
+      }
+
+      await feed(_buildSquatPose(down: true));
+      await feed(_buildSquatPose(down: false));
+      expect(pushController.repetitions, 0);
+
+      final top = plank(handY: 150);
+      final lower = plank(handY: 150, shoulderDrop: 21, hipDrop: 5, elbowDepth: -65);
+      await feed(top);
+      await feed(top);
+      await feed(lower);
+      expect(pushController.hint, 'Hold the lower position briefly');
+      await feed(lower);
+      await feed(top);
+      await feed(top);
+      expect(pushController.repetitions, 1);
+      expect(unusedSquatAdapter.frames, 0);
+      expect(grantCount, 0);
+      await pushController.cancel();
+    });
+
+    test('resume waits for camera initialization and teardown before opening again', () async {
+      const camera = CameraDescription(
+        name: 'front', lensDirection: CameraLensDirection.front, sensorOrientation: 90,
+      );
+      final firstInitialization = Completer<void>();
+      final firstOpen = Completer<void>();
+      var created = 0;
+      var open = 0;
+      var peak = 0;
+      final controller = ProductionChallengeController(
+        coordinator: scope.coordinator,
+        cameraPermissionChecker: cameraChecker,
+        nativeBridge: scope.nativeBridge,
+        isUnlockChallenge: false,
+        poseProcessorOverride: (_) async => [],
+        availableCamerasOverride: () async => [camera],
+        cameraControllerFactory: (description) {
+          final number = ++created;
+          return _LifecycleCamera(
+            description,
+            initializeAfter: number == 1 ? firstInitialization.future : Future<void>.value(),
+            onOpened: () {
+              open++;
+              if (open > peak) peak = open;
+              if (number == 1) firstOpen.complete();
+            },
+            onClosed: () => open--,
+          );
+        },
+      );
+      addTearDown(controller.dispose);
+      final start = controller.start();
+      await firstOpen.future;
+      final pause = controller.handleLifecycleChange(AppLifecycleState.paused);
+      final resume = controller.handleLifecycleChange(AppLifecycleState.resumed);
+      expect(created, 1);
+      firstInitialization.complete();
+      await Future.wait([start, pause, resume]);
+      expect(created, 2);
+      expect(peak, 1);
+      expect(controller.cameraReady, isTrue);
+
+      await controller.cancel();
+      expect(open, 0);
+      expect(scope.coordinator.currentState.sessionId, isNull);
+    });
+
+    test('a completed unlock cannot confirm the next challenge', () async {
+      List<Pose> nextPoses = [];
+      ProductionChallengeController buildUnlock() => ProductionChallengeController(
+        coordinator: scope.coordinator,
+        cameraPermissionChecker: cameraChecker,
+        nativeBridge: scope.nativeBridge,
+        isUnlockChallenge: true,
+        availableCamerasOverride: () async => [],
+        poseProcessorOverride: (_) async => nextPoses,
+      );
+
+      final first = buildUnlock();
+      await first.start();
+      Future<void> finish(ProductionChallengeController controller) async {
+        for (var rep = 0; rep < 5; rep++) {
+          await performVerifiedSquat(
+            controller,
+            nextPoses: nextPoses,
+            setPoses: (poses) => nextPoses = poses,
+          );
+        }
+        await Future<void>.delayed(Duration.zero);
+        await scope.coordinator.waitForCompletion();
+        await Future<void>.delayed(Duration.zero);
+      }
+      await finish(first);
+      expect(first.isUnlockConfirmed, isTrue);
+      first.releaseCompletedSession();
+      expect(scope.coordinator.currentState.sessionId, isNull);
+      first.dispose();
+
+      pendingChallenge = true;
+      rejectNextGrant = true;
+      final second = buildUnlock();
+      addTearDown(second.dispose);
+      await second.start();
+      expect(scope.coordinator.currentState.unlockUntil, isNull);
+      expect(scope.coordinator.currentState.accessGrantStatus, isNull);
+
+      try {
+        await finish(second);
+      } on AccessEngineException {
+        // This mocked native call is intentionally rejected.
+      }
+      expect(scope.coordinator.currentState.accessGrantStatus, AccessGrantStatus.failed);
+      expect(second.isUnlockConfirmed, isFalse);
     });
 
     testWidgets('8. FocusAccessGrantedScreen renders only after confirmed native grant, never on failed grant', (tester) async {

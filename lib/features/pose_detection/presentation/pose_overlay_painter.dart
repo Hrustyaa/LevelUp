@@ -10,11 +10,6 @@ import '../models/pose_overlay_state.dart';
 /// Lightweight [CustomPainter] rendering real-time white / lime-green skeleton
 /// lines over the camera preview.
 ///
-/// - Squat mode (`ExerciseMode.squat`): draws `hip → knee → ankle` for each
-///   detected leg.
-/// - Push-up mode (`ExerciseMode.pushUp`): draws `shoulder → elbow → wrist`
-///   for each detected arm.
-///
 /// White `#F7F8F8` = tracking active / standing.
 /// Lime `#C7FA5B` = valid form phase (squat down / push-up bottom).
 /// No joint circles. 5.5 px rounded strokes.
@@ -31,60 +26,45 @@ class PoseOverlayPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final hasContent = state.exerciseMode == ExerciseMode.pushUp
-        ? state.hasAnyArm
-        : state.hasAnyLeg;
-    if (!hasContent || size.isEmpty || state.imageSize.isEmpty) return;
+    if (size.isEmpty || state.imageSize.isEmpty) return;
 
     final alpha = state.opacity.clamp(0.0, 1.0);
-    final baseColor = state.isValidForm ? FocusStyle.accent : FocusStyle.text;
-    final color = baseColor.withValues(alpha: alpha);
-    final effectiveThreshold = alpha < 1.0
-        ? math.min(likelihoodThreshold, 0.35)
-        : likelihoodThreshold;
+    final points = {
+      for (final type in PoseOverlayState.jointTypes)
+        if (state.joint(type) case final joint?)
+          if (joint.isReliable(
+            state.uncertainJoints.contains(type) || alpha < 1
+                ? math.min(likelihoodThreshold, 0.35)
+                : likelihoodThreshold,
+          ))
+            type: PoseCoordinateMapper.mapPoint(
+              point: joint.imagePoint,
+              rawImageSize: state.imageSize,
+              rotation: state.rotation,
+              previewSize: size,
+              isFrontCamera: state.isFrontCamera,
+              fit: fit,
+            ),
+    };
     final linePaint = Paint()
-      ..color = color
       ..strokeWidth = 5.5
       ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
       ..style = PaintingStyle.stroke;
 
-    if (state.exerciseMode == ExerciseMode.pushUp) {
-      // Push-up mode: draw arm segments (shoulder → elbow → wrist)
-      for (final arm in [state.leftArm, state.rightArm]) {
-        if (arm == null) continue;
-        final mapped = PoseCoordinateMapper.mapArm(
-          arm: arm,
-          rawImageSize: state.imageSize,
-          rotation: state.rotation,
-          previewSize: size,
-          isFrontCamera: state.isFrontCamera,
-          likelihoodThreshold: effectiveThreshold,
-          fit: fit,
-        );
-        if (mapped == null) continue;
-
-        canvas.drawLine(mapped.shoulder, mapped.elbow, linePaint);
-        canvas.drawLine(mapped.elbow, mapped.wrist, linePaint);
-      }
-    } else {
-      // Squat mode: draw leg segments (hip → knee → ankle)
-      for (final leg in [state.leftLeg, state.rightLeg]) {
-        if (leg == null) continue;
-        final mapped = PoseCoordinateMapper.mapLeg(
-          leg: leg,
-          rawImageSize: state.imageSize,
-          rotation: state.rotation,
-          previewSize: size,
-          isFrontCamera: state.isFrontCamera,
-          likelihoodThreshold: effectiveThreshold,
-          fit: fit,
-        );
-        if (mapped == null) continue;
-
-        canvas.drawLine(mapped.hip, mapped.knee, linePaint);
-        canvas.drawLine(mapped.knee, mapped.ankle, linePaint);
-      }
+    for (final (start, end) in PoseOverlayState.connections) {
+      final from = points[start];
+      final to = points[end];
+      if (from == null || to == null) continue;
+      final uncertain =
+          state.uncertainJoints.contains(start) ||
+          state.uncertainJoints.contains(end);
+      final baseColor = state.isValidForm && !uncertain
+          ? FocusStyle.accent
+          : FocusStyle.text;
+      linePaint.color = baseColor.withValues(
+        alpha: uncertain ? math.min(alpha, 0.45) : alpha,
+      );
+      canvas.drawLine(from, to, linePaint);
     }
   }
 

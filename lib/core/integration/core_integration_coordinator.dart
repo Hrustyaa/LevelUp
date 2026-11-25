@@ -4,6 +4,7 @@ import '../../core/constants/channel_constants.dart';
 import '../../data/repositories/access_attempt_repository.dart';
 import '../../data/repositories/workout_history_repository.dart';
 import '../../features/challenge/application/challenge_service.dart';
+import '../../features/challenge/application/push_up_verification.dart';
 import '../../features/challenge/application/workout_session_manager.dart';
 import '../../features/focus/application/focus_service.dart';
 import '../../features/pose_detection/application/squat_counter.dart';
@@ -35,7 +36,10 @@ abstract class ICoreIntegrationCoordinator {
   /// - Android Accessibility permission is granted.
   /// - Voluntary Focus restriction is active.
   /// - Target package is in [ChannelConstants.allowedTargets].
-  Future<WorkoutSession> launchUnlockChallenge({bool requirePendingRequest = false});
+  Future<WorkoutSession> launchUnlockChallenge({
+    bool requirePendingRequest = false,
+    ExerciseType exerciseType = ExerciseType.squats,
+  });
 
   /// Launches a voluntary Free Workout session.
   ///
@@ -45,10 +49,10 @@ abstract class ICoreIntegrationCoordinator {
   });
 
   /// Connects an [IPoseEventSource] to stream verified pose repetitions to the active session.
-  void attachPoseEventSource(IPoseEventSource source);
+  void attachPoseEventSource(IPoseEventSource source, {String? sessionId});
 
   /// Detaches the currently connected pose event source, if any.
-  void detachPoseEventSource();
+  void detachPoseEventSource({String? sessionId});
 
   /// Directly processes a [SquatCounterResult] snapshot from the Pose Engine.
   ///
@@ -92,9 +96,11 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
 
   CoordinatorState _currentState = CoordinatorState.initial();
   StreamSubscription<SquatCounterResult>? _poseSubscription;
+  String? _poseSessionId;
 
   final Set<String> _completingSessionIds = <String>{};
   Completer<void>? _completionCompleter;
+  String? _simulatedSessionId;
 
   CoreIntegrationCoordinator({
     required INativeBridge nativeBridge,
@@ -143,9 +149,13 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
   }
 
   @override
-  Future<WorkoutSession> launchUnlockChallenge({bool requirePendingRequest = false}) async {
+  Future<WorkoutSession> launchUnlockChallenge({
+    bool requirePendingRequest = false,
+    ExerciseType exerciseType = ExerciseType.squats,
+  }) async {
     // 0. Ensure no workout session is already active or in-flight before consuming native request
-    if (_currentState.sessionStatus == WorkoutSessionStatus.active ||
+    if (_completingSessionIds.isNotEmpty ||
+        _currentState.sessionStatus == WorkoutSessionStatus.active ||
         _currentState.sessionStatus == WorkoutSessionStatus.preparing) {
       final error = SessionAlreadyActiveException(
         _currentState.sessionId ?? 'active_session',
@@ -182,6 +192,12 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
       throw error;
     }
 
+    final challengeRequest = _challengeService.createUnlockChallengeRequest(
+      target,
+      exerciseType: exerciseType,
+    );
+    final challengeDef = _challengeService.getChallengeDefinition(challengeRequest.challengeId);
+
     // 2. Consume native challenge request flag safely
     // NOTE: Native consumeChallengeRequest returns only a boolean flag indicating
     // the user clicked the overlay. It does NOT carry authenticated target package
@@ -195,16 +211,12 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
       throw error;
     }
 
-    // 3. Create challenge request from ChallengeService
-    final challengeRequest = _challengeService.createUnlockChallengeRequest(target);
-    final challengeDef = _challengeService.getChallengeDefinition(challengeRequest.challengeId);
-
     // 4. Create and start WorkoutSession via WorkoutSessionManager
     _completionCompleter = null;
     final session = _sessionManager.createSession(challengeRequest);
     final startedSession = _sessionManager.startSession(session.sessionId);
 
-    _emitState(_currentState.copyWith(
+    _emitState(CoordinatorState(
       challenge: challengeDef,
       challengeContext: ChallengeType.unlockChallenge,
       sessionId: startedSession.sessionId,
@@ -216,12 +228,7 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
         isAccessibilityGranted: focusState.isAccessibilityGranted,
       ),
       isFocusEnabled: focusState.isUserEnabled,
-      accessGrantStatus: null,
-      unlockUntil: null,
-      isWorkoutPersisted: false,
-      accessAttemptState: null,
       feedbackMessage: 'Встань так, чтобы камера видела ноги и корпус',
-      clearError: true,
     ));
 
     return startedSession;
@@ -232,7 +239,8 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
     ExerciseType exerciseType = ExerciseType.squats,
   }) async {
     // 0. Ensure no workout session is already active or in-flight
-    if (_currentState.sessionStatus == WorkoutSessionStatus.active ||
+    if (_completingSessionIds.isNotEmpty ||
+        _currentState.sessionStatus == WorkoutSessionStatus.active ||
         _currentState.sessionStatus == WorkoutSessionStatus.preparing) {
       final error = SessionAlreadyActiveException(
         _currentState.sessionId ?? 'active_session',
@@ -262,37 +270,53 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
         ? 'Поставь телефон напротив и направь камеру на верхнюю часть тела'
         : 'Встань так, чтобы камера видела ноги и корпус';
 
-    _emitState(_currentState.copyWith(
+    _emitState(CoordinatorState(
       challenge: challengeDef,
       challengeContext: ChallengeType.freeWorkout,
       sessionId: startedSession.sessionId,
       sessionStatus: startedSession.status,
       verifiedRepetitions: startedSession.verifiedRepetitions,
       targetRepetitions: startedSession.targetRepetitions,
-      selectedTarget: null,
-      accessGrantStatus: null,
-      isWorkoutPersisted: false,
-      accessAttemptState: null,
+      permissionStatus: _currentState.permissionStatus,
+      isFocusEnabled: _currentState.isFocusEnabled,
       feedbackMessage: initialHint,
-      clearError: true,
     ));
 
     return startedSession;
   }
 
   @override
-  void attachPoseEventSource(IPoseEventSource source) {
-    detachPoseEventSource();
-
+  void attachPoseEventSource(IPoseEventSource source, {String? sessionId}) {
     if (_nativeBridge is NativeBridge && source.isSimulated) {
       throw StateError(
         'Security Violation: Simulated pose event source cannot be attached when operating with real native platform bridge.',
       );
     }
 
+    final session = _sessionManager.currentSession;
+    final pushUps = source is PushUpPoseAdapter;
+    if (sessionId != null &&
+        (session?.sessionId != sessionId ||
+            session!.status != WorkoutSessionStatus.active ||
+            pushUps != (session.exerciseType == ExerciseType.pushUp))) {
+      throw StateError('The pose source does not match the active workout.');
+    }
+    if (pushUps && sessionId == null) {
+      throw StateError('A push-up pose source requires its active session ID.');
+    }
+
+    detachPoseEventSource();
+    _poseSessionId = sessionId;
     _poseSubscription = source.poseStream.listen((result) async {
+      if (sessionId != null && _sessionManager.currentSession?.sessionId != sessionId) {
+        return;
+      }
       try {
-        await handlePoseResult(result);
+        await _handlePoseResult(
+          result,
+          poseSessionId: sessionId,
+          fromPushUpCamera: pushUps,
+        );
       } catch (_) {
         // Exception state is preserved in currentState.errorMessage and SQLite journal
       }
@@ -300,15 +324,24 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
   }
 
   @override
-  void detachPoseEventSource() {
+  void detachPoseEventSource({String? sessionId}) {
+    if (sessionId != null && sessionId != _poseSessionId) return;
     _poseSubscription?.cancel();
     _poseSubscription = null;
+    _poseSessionId = null;
   }
 
   @override
   Future<WorkoutSession?> handlePoseResult(
     SquatCounterResult result, {
     String? eventId,
+  }) => _handlePoseResult(result, eventId: eventId);
+
+  Future<WorkoutSession?> _handlePoseResult(
+    SquatCounterResult result, {
+    String? eventId,
+    String? poseSessionId,
+    bool fromPushUpCamera = false,
   }) async {
     if (_nativeBridge is NativeBridge && result.isSimulated) {
       throw StateError(
@@ -318,6 +351,12 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
 
     final activeSession = _sessionManager.currentSession;
     if (activeSession == null) return null;
+    // A live route accepts only its attached counter. Push-ups always require
+    // the session-bound push-up detector, even in the debug configuration.
+    if ((_poseSessionId != null && poseSessionId != _poseSessionId) ||
+        (activeSession.exerciseType == ExerciseType.pushUp) != fromPushUpCamera) {
+      return activeSession;
+    }
 
     // Do not process repetitions if session has reached a terminal status
     if (activeSession.status.isTerminal) {
@@ -340,6 +379,12 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
         lastKneeAngle: result.kneeAngle,
       ));
       return activeSession;
+    }
+
+    // A session that consumes simulated progress stays simulated until it ends.
+    if (result.isSimulated &&
+        result.repetitionCount > activeSession.verifiedRepetitions) {
+      _simulatedSessionId = activeSession.sessionId;
     }
 
     // Only update progress when cumulative count increases monotonically
@@ -436,20 +481,19 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
   @override
   void releaseTerminalSession() {
     final session = _sessionManager.currentSession;
-    if (session != null && session.status.isTerminal) {
+    if (session != null) {
+      if (!session.status.isTerminal ||
+          _completingSessionIds.contains(session.sessionId)) {
+        return;
+      }
+      detachPoseEventSource(sessionId: session.sessionId);
       _sessionManager.releaseCurrentSession();
     }
-    _emitState(_currentState.copyWith(
-      sessionId: null,
-      sessionStatus: WorkoutSessionStatus.created,
-      verifiedRepetitions: 0,
-      targetRepetitions: 5,
-      accessGrantStatus: null,
-      unlockUntil: null,
-      accessAttemptState: null,
-      isWorkoutPersisted: false,
+    _emitState(CoordinatorState(
+      selectedTarget: _currentState.selectedTarget,
+      permissionStatus: _currentState.permissionStatus,
+      isFocusEnabled: _currentState.isFocusEnabled,
       feedbackMessage: 'Встань так, чтобы камера видела ноги и корпус',
-      clearError: true,
     ));
   }
 
@@ -464,13 +508,17 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
 
     try {
       // 1. Confirm session has completed and retrieve authoritative WorkoutResult.
-      // Experimental push-up sessions are tagged 'experimental_unverified' until
-      // physical-device accuracy validation is complete.
-      final workoutResult = session.toWorkoutResult(
-        source: session.exerciseType == ExerciseType.pushUp
-            ? 'experimental_unverified'
-            : 'camera',
-      );
+      final String source;
+      if (_simulatedSessionId == sessionId) {
+        source = 'simulated';
+      } else if (session.exerciseType == ExerciseType.pushUp) {
+        source = PushUpVerification.physicallyValidated
+            ? PushUpVerification.verifiedSource
+            : PushUpVerification.experimentalSource;
+      } else {
+        source = 'camera';
+      }
+      final workoutResult = session.toWorkoutResult(source: source);
 
       // 2. Persist completed workout result in SQLite
       await _workoutHistoryRepository.saveCompletedWorkout(workoutResult);
@@ -491,6 +539,13 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
           feedbackMessage: 'Свободная тренировка завершена! Прогресс сохранён.',
         ));
         return;
+      }
+
+      if (session.exerciseType == ExerciseType.pushUp &&
+          !PushUpVerification.canGrantAccess(workoutResult.source)) {
+        throw const IneligibleWorkoutContextException(
+          message: 'Push-up verification is ineligible for app access.',
+        );
       }
 
       // 4. Unlock Challenge: execute access grant workflow

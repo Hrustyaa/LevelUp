@@ -1,6 +1,8 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:levelup_test/app/challenge/production_challenge_screen.dart';
+import 'package:levelup_test/app/challenge/workout_exercise_screen.dart';
+import 'package:levelup_test/focus_experience/focus_exercises.dart';
 import 'package:levelup_test/app/di/app_scope.dart';
 import 'package:levelup_test/core/constants/channel_constants.dart';
 import 'package:levelup_test/core/integration/core_integration_coordinator.dart';
@@ -103,6 +105,7 @@ void main() {
   late String targetPackage;
   late List<String> methodCalls;
   late AppScope scope;
+  late MockCameraPermissionChecker cameraChecker;
 
   setUp(() async {
     serviceEnabled = false;
@@ -139,7 +142,7 @@ void main() {
     const bridge = NativeBridge();
     final focusService = FocusService(bridge: bridge);
     final settingsRepo = InMemorySettingsRepository();
-    final cameraChecker = MockCameraPermissionChecker(
+    cameraChecker = MockCameraPermissionChecker(
       status: CameraPermissionStatus.granted,
     );
     final settingsService = SettingsService(
@@ -325,11 +328,12 @@ void main() {
       expect(scope.focusService.currentState?.isAccessibilityGranted, isTrue);
     });
 
-    testWidgets('5. Challenge tab Movement action launches Free Workout without ever calling grantAccess', (tester) async {
+    testWidgets('5. Workout chooses the exercise before camera or session startup and never grants access', (tester) async {
       SharedPreferences.setMockInitialValues({
         'levelup.onboarding.completed': true,
         'levelup.welcome.language': 'en',
         'levelup.focus.selected_apps': [ChannelConstants.targetYouTube],
+        'levelup.focus.exercise_selection': ['squat'],
       });
       final dispatcher = tester.binding.platformDispatcher;
       dispatcher.accessibilityFeaturesTestValue =
@@ -343,9 +347,25 @@ void main() {
       await tester.tap(find.text('Challenge'));
       await tester.pumpAndSettle();
 
-      final openChallengeBtn = find.text('Open movement challenge');
+      expect(find.text('Workout'), findsOneWidget);
+      expect(find.text('Quick Reset'), findsOneWidget);
+      final openChallengeBtn = find.text('Open workout');
       await tester.ensureVisible(openChallengeBtn);
+      final cameraChecksBeforeChoice = cameraChecker.checkCount;
       await tester.tap(openChallengeBtn);
+      await tester.pumpAndSettle();
+      expect(find.byType(WorkoutExerciseScreen), findsOneWidget);
+      expect(find.byType(ProductionChallengeScreen), findsNothing);
+      expect(scope.coordinator.currentState.sessionId, isNull);
+
+      for (final type in ['Push-ups', 'Squats', 'Push-ups']) {
+        await tester.tap(find.text(type));
+        await tester.pump();
+      }
+      expect(cameraChecker.checkCount, cameraChecksBeforeChoice);
+      expect(scope.coordinator.currentState.sessionId, isNull);
+
+      await tester.tap(find.text('Start Workout'));
       await tester.pump();
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
@@ -355,6 +375,13 @@ void main() {
         find.byType(ProductionChallengeScreen),
       );
       expect(screen.isUnlockChallenge, isFalse);
+      expect(screen.exerciseType, ExerciseType.pushUp);
+      expect(find.byType(ChoiceChip), findsNothing);
+      expect(scope.coordinator.currentState.challenge?.exerciseType, ExerciseType.pushUp);
+      expect(cameraChecker.checkCount, greaterThan(cameraChecksBeforeChoice));
+      expect(scope.settingsService.currentState.settings.preferredExerciseType, ExerciseType.pushUp);
+      final prefs = await SharedPreferences.getInstance();
+      expect(FocusExercisePreferences(prefs, allowPushUpUnlock: true).selected, {FocusExerciseId.squat});
       expect(methodCalls, isNot(contains(ChannelConstants.methodGrantAccess)));
       expect(methodCalls, isNot(contains('setGateLanguage')));
     });

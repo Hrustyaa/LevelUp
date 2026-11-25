@@ -7,11 +7,7 @@ enum ExerciseType {
   squats('Squats', 'Bodyweight squats with full range of motion (standing -> down -> standing)'),
 
   /// Front-facing push-up detected via Google ML Kit pose landmarks
-  /// (shoulder, elbow, wrist). Phone placed on a surface facing the user.
-  ///
-  /// NOTE: Push-ups are available for Free Workout only.
-  /// Native unlock via push-ups is disabled until physical-device accuracy
-  /// validation is complete.
+  /// across the arms, trunk and legs. Unlock is experimental in debug builds.
   pushUp('Push-ups', 'Front-facing push-ups (top -> down -> top). Phone on surface facing user.');
 
   final String displayName;

@@ -56,6 +56,31 @@ Widget _hostFocusManagement({
 );
 
 void main() {
+  testWidgets('challenge cards localize Workout and the one-minute Quick Reset', (tester) async {
+    for (final (language, tab, workout, reset) in [
+      (DashboardLanguage.en, 'Challenge', 'Workout', 'Quick Reset'),
+      (DashboardLanguage.ru, 'Задания', 'Тренировка', 'Короткая пауза'),
+      (DashboardLanguage.kk, 'Тапсырма', 'Жаттығу', 'Қысқа үзіліс'),
+    ]) {
+      await tester.pumpWidget(MaterialApp(
+        key: ValueKey(language),
+        home: LevelUpHomeScreen(gateway: _FakeGateway(), language: language),
+      ));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(tab));
+      await tester.pumpAndSettle();
+      expect(find.text(workout), findsOneWidget);
+      expect(find.text(reset), findsOneWidget);
+      await tester.ensureVisible(find.byKey(const ValueKey('challenge_break')));
+      await tester.tap(find.byKey(const ValueKey('challenge_break')));
+      await tester.pumpAndSettle();
+      expect(find.text(reset), findsOneWidget);
+      expect(find.text('01:00'), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+    }
+  });
+
   testWidgets('1. Tapping Focus card on Home switches to Focus tab', (t) async {
     t.view.physicalSize = const Size(1080, 2400);
     t.view.devicePixelRatio = 2.0;

@@ -6,6 +6,7 @@ import '../core/constants/channel_constants.dart';
 import '../core/errors/access_exceptions.dart';
 import '../core/errors/native_bridge_exception.dart';
 import '../models/access_grant_request.dart';
+import '../features/challenge/data/challenge_catalog.dart';
 import '../models/access_grant_result.dart';
 import '../models/access_grant_status.dart';
 import '../models/challenge_type.dart';
@@ -72,11 +73,20 @@ class AccessService implements IAccessService {
   @override
   Future<AccessGrantResult> grantAccessForCompletedWorkout(WorkoutResult result) async {
     final request = AccessGrantRequest.fromWorkoutResult(result);
-    return requestAccess(request);
+    return _requestAccess(request);
   }
 
   @override
   Future<AccessGrantResult> requestAccess(AccessGrantRequest request) async {
+    if (request.challengeId == ChallengeCatalog.pushUpUnlockId) {
+      throw const IneligibleWorkoutContextException(
+        message: 'Push-up access requires a completed workout result.',
+      );
+    }
+    return _requestAccess(request);
+  }
+
+  Future<AccessGrantResult> _requestAccess(AccessGrantRequest request) async {
     // 0. Runtime validation of AccessGrantRequest integrity
     if (request.challengeContext != ChallengeType.unlockChallenge) {
       throw const IneligibleWorkoutContextException();

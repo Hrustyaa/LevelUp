@@ -1,7 +1,8 @@
 import 'dart:async';
 
 import 'package:camera/camera.dart';
-import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/foundation.dart'
+    show ValueListenable, debugPrint, kDebugMode;
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'package:material_ui/material_ui.dart';
@@ -9,6 +10,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../core/integration/coordinator_state.dart';
 import '../../core/integration/core_integration_coordinator.dart';
 import '../../core/integration/pose_event_adapter.dart';
+import '../../features/challenge/application/push_up_verification.dart';
 import '../../features/pose_detection/application/pose_landmark_smoother.dart';
 import '../../features/pose_detection/application/pose_temporal_guard.dart';
 import '../../features/pose_detection/application/pose_visibility_hysteresis.dart';
@@ -26,9 +28,8 @@ import '../../models/workout_session_status.dart';
 import '../../services/native_bridge.dart';
 
 /// Function signature for creating a [CameraController] (overridable in tests).
-typedef CameraControllerFactory = CameraController Function(
-  CameraDescription description,
-);
+typedef CameraControllerFactory =
+    CameraController Function(CameraDescription description);
 
 /// Function signature for processing an [InputImage] into ML Kit [Pose]s.
 typedef PoseProcessor = Future<List<Pose>> Function(InputImage input);
@@ -54,12 +55,13 @@ class ProductionChallengeController extends ChangeNotifier {
   final INativeBridge _nativeBridge;
   final bool isUnlockChallenge;
 
-  /// Selected exercise for this session. Fixed at construction; push-ups are
-  /// available in Free Workout only. Unlock challenges always use squats.
+  /// Exercise assigned to this camera session.
   final ExerciseType exerciseType;
   final String language;
-  final PoseEngineAdapter _poseAdapter;
-  late final PushUpPoseAdapter _pushUpPoseAdapter;
+  final String? _unlockSessionId;
+  late final PoseEngineAdapter? _poseAdapter;
+  late final PushUpPoseAdapter? _pushUpPoseAdapter;
+  late final PushUpCounter? _pushUpCounter;
   final Future<List<CameraDescription>> Function()? _availableCamerasOverride;
   final CameraControllerFactory? _cameraControllerFactory;
   final PoseProcessor? _poseProcessorOverride;
@@ -69,6 +71,9 @@ class ProductionChallengeController extends ChangeNotifier {
   CameraController? _cameraController;
   CameraDescription? _cameraDescription;
   StreamSubscription<CoordinatorState>? _coordinatorSub;
+  Future<void> _cameraTransition = Future<void>.value();
+  Future<void>? _sessionStart;
+  String? _sessionId;
 
   bool _disposed = false;
   bool _starting = false;
@@ -86,11 +91,8 @@ class ProductionChallengeController extends ChangeNotifier {
   int _sessionEpoch = 0;
   final PoseLandmarkSmoother _landmarkSmoother = PoseLandmarkSmoother();
   final PoseTemporalGuard _temporalGuard = PoseTemporalGuard();
-  final PoseVisibilityHysteresis<String, LegLandmarks> _legHysteresis =
-      PoseVisibilityHysteresis<String, LegLandmarks>();
-  final PoseVisibilityHysteresis<String, ArmLandmarks> _armHysteresis =
-      PoseVisibilityHysteresis<String, ArmLandmarks>();
-  final PushUpCounter _pushUpCounter = PushUpCounter();
+  final _jointHysteresis =
+      PoseVisibilityHysteresis<PoseLandmarkType, PoseJointPoint>();
   final ValueNotifier<PoseOverlayState> _poseOverlayNotifier =
       ValueNotifier<PoseOverlayState>(PoseOverlayState.empty);
   String? _error;
@@ -107,23 +109,39 @@ class ProductionChallengeController extends ChangeNotifier {
     required this.isUnlockChallenge,
     ExerciseType exerciseType = ExerciseType.squats,
     this.language = 'ru',
+    String? unlockSessionId,
     PoseEngineAdapter? poseAdapter,
     Future<List<CameraDescription>> Function()? availableCamerasOverride,
     CameraControllerFactory? cameraControllerFactory,
     PoseProcessor? poseProcessorOverride,
     DateTime Function()? clock,
-  })  : exerciseType =
-            isUnlockChallenge ? ExerciseType.squats : exerciseType,
-        _coordinator = coordinator,
-        _cameraPermissionChecker = cameraPermissionChecker,
-        _nativeBridge = nativeBridge,
-        _poseAdapter = poseAdapter ?? PoseEngineAdapter(isSimulated: false),
-        _availableCamerasOverride = availableCamerasOverride,
-        _cameraControllerFactory = cameraControllerFactory,
-        _poseProcessorOverride = poseProcessorOverride,
-        _clock = clock ?? DateTime.now {
-    // Push-up adapter wraps _pushUpCounter for coordinator integration.
-    _pushUpPoseAdapter = PushUpPoseAdapter(counter: _pushUpCounter);
+  }) : exerciseType = isUnlockChallenge && !PushUpVerification.unlockEnabled
+           ? ExerciseType.squats
+           : exerciseType,
+       _coordinator = coordinator,
+       _cameraPermissionChecker = cameraPermissionChecker,
+       _nativeBridge = nativeBridge,
+       _unlockSessionId = unlockSessionId,
+       _availableCamerasOverride = availableCamerasOverride,
+       _cameraControllerFactory = cameraControllerFactory,
+       _poseProcessorOverride = poseProcessorOverride,
+       _clock = clock ?? DateTime.now {
+    final pushUps = this.exerciseType == ExerciseType.pushUp;
+    _poseAdapter = pushUps ? null : poseAdapter ?? PoseEngineAdapter();
+    _pushUpCounter = pushUps
+        ? PushUpCounter(
+            onDiagnostic:
+                kDebugMode &&
+                    const bool.fromEnvironment(
+                      'LEVELUP_DEBUG_PUSH_UP_DIAGNOSTICS',
+                    )
+                ? (message) => debugPrint('LevelUp push-up: $message')
+                : null,
+          )
+        : null;
+    _pushUpPoseAdapter = pushUps
+        ? PushUpPoseAdapter(counter: _pushUpCounter)
+        : null;
   }
 
   // Exposed UI state
@@ -133,7 +151,8 @@ class ProductionChallengeController extends ChangeNotifier {
   bool get cameraReady =>
       _cameraController != null && _cameraController!.value.isInitialized;
   bool get trackingReady => _trackingReady && !_isTerminal;
-  int get repetitions => _coordinator.currentState.verifiedRepetitions;
+  int get repetitions =>
+      _ownsSession ? _coordinator.currentState.verifiedRepetitions : 0;
   int get targetRepetitions => _coordinator.currentState.targetRepetitions;
   String? get hint => _hint;
   String? get error => _error;
@@ -149,18 +168,21 @@ class ProductionChallengeController extends ChangeNotifier {
       !_isFreeWorkoutCompleted &&
       (_error != null || _cameraPermissionDenied);
 
+  bool get _ownsSession =>
+      _sessionId != null && _coordinator.currentState.sessionId == _sessionId;
+
   bool get _isTerminal =>
       _canceled ||
       _isUnlockConfirmed ||
       _isFreeWorkoutCompleted ||
-      _coordinator.currentState.sessionStatus.isTerminal;
+      (_ownsSession && _coordinator.currentState.sessionStatus.isTerminal);
 
   String _tr(String ru, String en, String kk) => focusTr(language, ru, en, kk);
 
   /// Initializes the coordinator subscription, ML Kit detector, workout session,
   /// camera permission check, and live camera stream.
   Future<void> start() async {
-    if (_disposed || _starting || _canceled) return;
+    if (_disposed || _starting || _canceled || _ownsSession) return;
     _starting = true;
     _sessionEpoch++;
     _landmarkSmoother.reset();
@@ -169,6 +191,10 @@ class ProductionChallengeController extends ChangeNotifier {
     _notify();
 
     try {
+      _sessionStart = _claimSession();
+      await _sessionStart;
+      if (_disposed || _canceled || !_ownsSession) return;
+
       _coordinatorSub ??= _coordinator.stateStream.listen(_onCoordinatorState);
 
       if (_poseProcessorOverride == null && _poseDetector == null) {
@@ -180,30 +206,12 @@ class ProductionChallengeController extends ChangeNotifier {
         );
       }
 
-      // Launch session only if not already launched by gate handler
-      final current = _coordinator.currentState;
-      final alreadyActive =
-          current.sessionStatus == WorkoutSessionStatus.active ||
-              current.sessionStatus == WorkoutSessionStatus.preparing;
-
-      if (!alreadyActive) {
-        if (isUnlockChallenge) {
-          await _coordinator.launchUnlockChallenge(requirePendingRequest: true);
-        } else {
-          await _coordinator.launchFreeWorkout(exerciseType: exerciseType);
-        }
-      }
-
-      if (_disposed || _canceled) return;
-
-      if (exerciseType == ExerciseType.pushUp) {
-        _pushUpPoseAdapter.reset();
-        _coordinator.attachPoseEventSource(_pushUpPoseAdapter);
-      } else {
-        _poseAdapter.reset();
-        _coordinator.attachPoseEventSource(_poseAdapter);
-      }
-
+      _poseAdapter?.reset();
+      _pushUpPoseAdapter?.reset();
+      _coordinator.attachPoseEventSource(
+        _pushUpPoseAdapter ?? _poseAdapter!,
+        sessionId: _sessionId,
+      );
       await _ensureCameraPermissionAndOpen();
     } catch (e) {
       if (!_disposed) {
@@ -211,20 +219,66 @@ class ProductionChallengeController extends ChangeNotifier {
         _notify();
       }
     } finally {
+      _sessionStart = null;
       _starting = false;
     }
   }
 
-  Future<void> _ensureCameraPermissionAndOpen() async {
-    if (_disposed || _canceled || !_foreground) return;
+  Future<void> _claimSession() async {
+    if (_unlockSessionId != null) {
+      final state = _coordinator.currentState;
+      if (state.sessionId != _unlockSessionId ||
+          state.sessionStatus != WorkoutSessionStatus.active ||
+          state.challengeContext != ChallengeType.unlockChallenge ||
+          state.challenge?.exerciseType != exerciseType) {
+        throw StateError('The assigned Focus challenge is no longer active.');
+      }
+      _sessionId = _unlockSessionId;
+      return;
+    }
 
+    final session = isUnlockChallenge
+        ? await _coordinator.launchUnlockChallenge(
+            requirePendingRequest: true,
+            exerciseType: exerciseType,
+          )
+        : await _coordinator.launchFreeWorkout(exerciseType: exerciseType);
+    _sessionId = session.sessionId;
+  }
+
+  Future<void> _queueCameraTransition(Future<void> Function() action) {
+    final transition = _cameraTransition.then((_) => action());
+    _cameraTransition = transition.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return transition;
+  }
+
+  bool _canOpenCamera(int epoch) =>
+      !_disposed &&
+      _foreground &&
+      !_isTerminal &&
+      _ownsSession &&
+      epoch == _sessionEpoch;
+
+  Future<void> _ensureCameraPermissionAndOpen() {
+    final epoch = _sessionEpoch;
+    return _queueCameraTransition(() async {
+      if (!_canOpenCamera(epoch) || _cameraController != null) return;
+      await _checkCameraPermissionAndOpen(epoch);
+    });
+  }
+
+  Future<void> _checkCameraPermissionAndOpen(int epoch) async {
     var status = await _cameraPermissionChecker.checkCameraPermission();
+    if (!_canOpenCamera(epoch)) return;
     if (status == CameraPermissionStatus.denied) {
       // User explicitly initiated this challenge; request permission now.
       status = await _cameraPermissionChecker.requestCameraPermission();
     }
 
-    if (_disposed || _canceled) return;
+    if (!_canOpenCamera(epoch)) return;
 
     if (status == CameraPermissionStatus.permanentlyDenied ||
         status == CameraPermissionStatus.restricted) {
@@ -253,14 +307,10 @@ class ProductionChallengeController extends ChangeNotifier {
 
     _cameraPermissionDenied = false;
     _cameraPermissionPermanentlyDenied = false;
-    await _openCamera();
+    await _openCamera(epoch);
   }
 
-  Future<void> _openCamera() async {
-    if (_cameraController != null || _disposed || !_foreground || _isTerminal) {
-      return;
-    }
-
+  Future<void> _openCamera(int epoch) async {
     try {
       final available = _availableCamerasOverride != null
           ? await _availableCamerasOverride()
@@ -268,7 +318,7 @@ class ProductionChallengeController extends ChangeNotifier {
               const Duration(milliseconds: 1500),
               onTimeout: () => <CameraDescription>[],
             );
-      if (_disposed || !_foreground || _isTerminal) return;
+      if (!_canOpenCamera(epoch)) return;
 
       if (available.isEmpty) {
         _error = _tr(
@@ -298,25 +348,19 @@ class ProductionChallengeController extends ChangeNotifier {
       _cameraDescription = camera;
       await next.initialize();
 
-      if (_disposed || !_foreground || _isTerminal || _cameraController != next) {
-        await next.dispose();
-        if (_cameraController == next) {
-          _cameraController = null;
-          _cameraDescription = null;
-        }
+      if (!_canOpenCamera(epoch)) {
+        await _closeCamera();
         return;
       }
 
-      await next.startImageStream(_onFrame);
+      await next.startImageStream((image) {
+        if (_cameraController == next && _canOpenCamera(epoch)) _onFrame(image);
+      });
 
-      if (!_disposed) {
+      if (_canOpenCamera(epoch)) {
         _error = null;
         _hint = exerciseType == ExerciseType.pushUp
-            ? _tr(
-                'Поставь телефон напротив и направь камеру на верхнюю часть тела.',
-                'Place phone facing your upper body.',
-                'Телефонды алдыңызға қойып, камераны жоғарғы денеге бағыттаңыз.',
-              )
+            ? _pushUpHint('setup')
             : _tr(
                 'Встань боком так, чтобы в кадре были корпус и ноги.',
                 'Stand sideways with your body and legs in frame.',
@@ -325,8 +369,8 @@ class ProductionChallengeController extends ChangeNotifier {
         _notify();
       }
     } on CameraException catch (e) {
-      await _releaseCamera();
-      if (_disposed || _canceled) return;
+      await _closeCamera();
+      if (!_canOpenCamera(epoch)) return;
       if (e.code == 'CameraAccessDeniedWithoutPrompt') {
         _cameraPermissionDenied = true;
         _cameraPermissionPermanentlyDenied = true;
@@ -340,8 +384,8 @@ class ProductionChallengeController extends ChangeNotifier {
       );
       _notify();
     } catch (e) {
-      await _releaseCamera();
-      if (_disposed || _canceled) return;
+      await _closeCamera();
+      if (!_canOpenCamera(epoch)) return;
       _error = _tr(
         'Не удалось запустить камеру: $e',
         'Could not start camera: $e',
@@ -351,13 +395,17 @@ class ProductionChallengeController extends ChangeNotifier {
     }
   }
 
-  Future<void> _releaseCamera() async {
+  Future<void> _releaseCamera() {
     _sessionEpoch++;
     _clearPoseOverlay();
+    _trackingReady = false;
+    return _queueCameraTransition(_closeCamera);
+  }
+
+  Future<void> _closeCamera() async {
     final current = _cameraController;
     _cameraController = null;
     _cameraDescription = null;
-    _trackingReady = false;
     if (current == null) return;
 
     try {
@@ -369,6 +417,16 @@ class ProductionChallengeController extends ChangeNotifier {
     try {
       await current.dispose();
     } catch (_) {}
+  }
+
+  Future<void> _closePoseDetector() async {
+    final detector = _poseDetector;
+    _poseDetector = null;
+    try {
+      await detector?.close();
+    } catch (_) {
+      // The camera and session still need to close if the plugin is gone.
+    }
   }
 
   InputImage? _fromCameraImage(CameraImage image) {
@@ -416,8 +474,8 @@ class ProductionChallengeController extends ChangeNotifier {
   /// evaluates knee angle via [SquatGeometry], and forwards to [PoseEngineAdapter].
   @visibleForTesting
   Future<void> processInputImage(InputImage input) async {
-    if (_disposed || !_foreground || _isTerminal) return;
     final epoch = _sessionEpoch;
+    if (!_canOpenCamera(epoch)) return;
 
     try {
       final List<Pose> poses;
@@ -429,7 +487,7 @@ class ProductionChallengeController extends ChangeNotifier {
         poses = await detector.processImage(input);
       }
 
-      if (_disposed || !_foreground || _isTerminal || epoch != _sessionEpoch) {
+      if (!_canOpenCamera(epoch)) {
         return;
       }
 
@@ -442,117 +500,50 @@ class ProductionChallengeController extends ChangeNotifier {
           'Денеңіз толық көрінетіндей артқа шегініңіз',
         );
         if (exerciseType == ExerciseType.pushUp) {
-          _pushUpPoseAdapter.processAngle(null);
+          _hint = _pushUpHint('tracking');
+          _pushUpPoseAdapter!.processPose(null, timestamp: _clock());
         } else {
-          _poseAdapter.processAngle(null);
+          _poseAdapter!.processAngle(null);
         }
         _notify();
         return;
       }
 
-      // --- Push-up path ---
-      if (exerciseType == ExerciseType.pushUp) {
-        final elbowAngle = PushUpGeometry.estimateElbowAngle(poses.first);
-        final imageSize = input.metadata?.size ?? Size.zero;
-        final rotation =
-            input.metadata?.rotation ?? InputImageRotation.rotation0deg;
-        final isFrontCamera =
-            (_cameraDescription?.lensDirection ?? CameraLensDirection.front) ==
-                CameraLensDirection.front;
-
-        if (elbowAngle == null) {
-          _trackingReady = false;
-          _hint = _tr(
-            'Не вижу плечи и локти — направь камеру на верхнюю часть тела',
-            'Show your shoulders and elbows — point camera at upper body',
-            'Иық пен шынтақты көрсет — камераны жоғарғы денеге бағытта',
-          );
-          _pushUpPoseAdapter.processAngle(null);
-          final overlay = _buildSmoothedArmOverlayState(
-            pose: poses.first,
-            imageSize: imageSize,
-            rotation: rotation,
-            isFrontCamera: isFrontCamera,
-            isValidForm: false,
-            sessionEpoch: epoch,
-          );
-          if (overlay == PoseOverlayState.empty) {
-            _clearPoseOverlay();
-          } else if (!_disposed) {
-            _poseOverlayNotifier.value = overlay;
-          }
-          _notify();
-          return;
-        }
-        final result = _pushUpPoseAdapter.processAngle(elbowAngle);
-        _trackingReady = true;
-        _hint = result.feedbackMessage;
-        final isValidForm = result.isValidTracking &&
-            (result.phase == SquatPhase.down || result.isRepetitionCompleted);
-        final overlay = _buildSmoothedArmOverlayState(
-          pose: poses.first,
-          imageSize: imageSize,
-          rotation: rotation,
-          isFrontCamera: isFrontCamera,
-          isValidForm: isValidForm,
-          sessionEpoch: epoch,
-        );
-        if (!_disposed) _poseOverlayNotifier.value = overlay;
-        _notify();
-        return;
-      }
-
-      // --- Squat path ---
-
-      final angle = estimateKneeAngle(poses.first);
+      final pose = poses.first;
+      final poseTime = _clock();
       final imageSize = input.metadata?.size ?? Size.zero;
       final rotation =
           input.metadata?.rotation ?? InputImageRotation.rotation0deg;
       final isFrontCamera =
           (_cameraDescription?.lensDirection ?? CameraLensDirection.front) ==
-              CameraLensDirection.front;
-
-      if (angle == null) {
-        _trackingReady = false;
-        _hint = _tr(
-          'Не вижу бедро, колено и стопу — повернись боком',
-          'Show your hip, knee, and ankle — turn sideways',
-          'Жамбас, тізе және табан көрінетіндей қырынан тұрыңыз',
-        );
-        _poseAdapter.processAngle(null);
-        final overlay = _buildSmoothedOverlayState(
-          pose: poses.first,
-          imageSize: imageSize,
-          rotation: rotation,
-          isFrontCamera: isFrontCamera,
-          isValidForm: false,
-          sessionEpoch: epoch,
-        );
-        if (overlay == PoseOverlayState.empty) {
-          _clearPoseOverlay();
-        } else if (!_disposed) {
-          _poseOverlayNotifier.value = overlay;
-        }
-        _notify();
-        return;
-      }
-
-      final result = _poseAdapter.processAngle(angle);
-      _trackingReady = true;
-      _hint = result.feedbackMessage;
-      final isValidForm = result.isValidTracking &&
+          CameraLensDirection.front;
+      final pushUp = exerciseType == ExerciseType.pushUp;
+      final result = pushUp
+          ? _pushUpPoseAdapter!.processPose(pose, timestamp: poseTime)
+          : _poseAdapter!.processAngle(estimateKneeAngle(pose));
+      _trackingReady = result.isValidTracking;
+      _hint = pushUp
+          ? _pushUpHint(result.feedbackMessage)
+          : result.isValidTracking
+          ? result.feedbackMessage
+          : _tr(
+              'Не вижу бедро, колено и стопу — повернись боком',
+              'Show your hip, knee, and ankle — turn sideways',
+              'Жамбас, тізе және табан көрінетіндей қырынан тұрыңыз',
+            );
+      final isValidForm =
+          result.isValidTracking &&
           (result.phase == SquatPhase.down || result.isRepetitionCompleted);
       final overlay = _buildSmoothedOverlayState(
-        pose: poses.first,
+        pose: pose,
         imageSize: imageSize,
         rotation: rotation,
         isFrontCamera: isFrontCamera,
         isValidForm: isValidForm,
         sessionEpoch: epoch,
+        now: poseTime,
       );
-      if (!_disposed) {
-        _poseOverlayNotifier.value = overlay;
-      }
+      if (!_disposed) _poseOverlayNotifier.value = overlay;
       _notify();
     } catch (_) {
       // Ignore transient single-frame ML Kit errors
@@ -562,8 +553,7 @@ class ProductionChallengeController extends ChangeNotifier {
   void _clearPoseOverlay() {
     _landmarkSmoother.reset();
     _temporalGuard.reset();
-    _legHysteresis.reset();
-    _armHysteresis.reset();
+    _jointHysteresis.reset();
     if (!_disposed && _poseOverlayNotifier.value != PoseOverlayState.empty) {
       _poseOverlayNotifier.value = PoseOverlayState.empty;
     }
@@ -647,12 +637,6 @@ class ProductionChallengeController extends ChangeNotifier {
     return _landmarkSmoother.smooth(type, target, timestamp: now);
   }
 
-  /// Builds a [PoseOverlayState] identical to [extractOverlayState] but with
-  /// each landmark coordinate passed through [PoseTemporalGuard] and
-  /// [PoseLandmarkSmoother] first.
-  ///
-  /// **Important:** raw landmark coordinates are still forwarded unchanged to
-  /// [estimateKneeAngle] → [SquatCounter]. Smoothing is cosmetic only.
   PoseOverlayState _buildSmoothedOverlayState({
     required Pose pose,
     required Size imageSize,
@@ -660,193 +644,99 @@ class ProductionChallengeController extends ChangeNotifier {
     required bool isFrontCamera,
     required bool isValidForm,
     required int sessionEpoch,
+    required DateTime now,
   }) {
-    final map = pose.landmarks;
-
-    final now = _clock();
-    LegLandmarks? extractLegCandidate(
-      PoseLandmarkType hipType,
-      PoseLandmarkType kneeType,
-      PoseLandmarkType ankleType,
-    ) {
-      final hip = map[hipType];
-      final knee = map[kneeType];
-      final ankle = map[ankleType];
-      if (hip == null || knee == null || ankle == null) return null;
-      final rawLeg = LegLandmarks(
-        hip: PoseJointPoint(
-          imagePoint: Offset(hip.x, hip.y),
-          likelihood: hip.likelihood,
-        ),
-        knee: PoseJointPoint(
-          imagePoint: Offset(knee.x, knee.y),
-          likelihood: knee.likelihood,
-        ),
-        ankle: PoseJointPoint(
-          imagePoint: Offset(ankle.x, ankle.y),
-          likelihood: ankle.likelihood,
-        ),
+    final joints = <PoseLandmarkType, PoseJointPoint>{};
+    final uncertain = <PoseLandmarkType>{};
+    for (final type in PoseOverlayState.jointTypes) {
+      final landmark = pose.landmarks[type];
+      PoseJointPoint? candidate;
+      if (landmark != null) {
+        final raw = PoseJointPoint(
+          imagePoint: Offset(landmark.x, landmark.y),
+          likelihood: landmark.likelihood,
+        );
+        if (raw.isReliable(_jointHysteresis.exitThreshold)) {
+          candidate = PoseJointPoint(
+            imagePoint: _smoothJoint(type, raw.imagePoint, imageSize, now),
+            likelihood: raw.likelihood,
+          );
+        }
+      }
+      final tracked = _jointHysteresis.update(
+        key: type,
+        candidate: candidate,
+        minLikelihood: candidate?.likelihood ?? 0,
+        now: now,
       );
-      if (!rawLeg.isReliable(_legHysteresis.exitThreshold)) return null;
-
-      return LegLandmarks(
-        hip: PoseJointPoint(
-          imagePoint: _smoothJoint(
-              hipType, rawLeg.hip.imagePoint, imageSize, now),
-          likelihood: hip.likelihood,
-        ),
-        knee: PoseJointPoint(
-          imagePoint: _smoothJoint(
-              kneeType, rawLeg.knee.imagePoint, imageSize, now),
-          likelihood: knee.likelihood,
-        ),
-        ankle: PoseJointPoint(
-          imagePoint: _smoothJoint(
-              ankleType, rawLeg.ankle.imagePoint, imageSize, now),
-          likelihood: ankle.likelihood,
-        ),
-      );
+      if (tracked.value case final value?) joints[type] = value;
+      if (tracked.isUncertain) uncertain.add(type);
     }
+    if (joints.isEmpty) return PoseOverlayState.empty;
 
-    final leftCandidate = extractLegCandidate(
-      PoseLandmarkType.leftHip,
-      PoseLandmarkType.leftKnee,
-      PoseLandmarkType.leftAnkle,
-    );
-    final rightCandidate = extractLegCandidate(
-      PoseLandmarkType.rightHip,
-      PoseLandmarkType.rightKnee,
-      PoseLandmarkType.rightAnkle,
-    );
-
-    final leftRes = _legHysteresis.update(
-      key: 'left',
-      candidate: leftCandidate,
-      minLikelihood: leftCandidate?.minLikelihood ?? 0.0,
-      now: now,
-    );
-    final rightRes = _legHysteresis.update(
-      key: 'right',
-      candidate: rightCandidate,
-      minLikelihood: rightCandidate?.minLikelihood ?? 0.0,
-      now: now,
-    );
-
-    if (!leftRes.isVisible && !rightRes.isVisible) {
-      return PoseOverlayState.empty;
-    }
-
-    final hasConfident = leftRes.isConfident || rightRes.isConfident;
     return PoseOverlayState(
-      leftLeg: leftRes.value,
-      rightLeg: rightRes.value,
+      joints: Map.unmodifiable(joints),
+      uncertainJoints: Set.unmodifiable(uncertain),
       imageSize: imageSize,
       rotation: rotation,
       isFrontCamera: isFrontCamera,
-      isValidForm: isValidForm && hasConfident,
+      isValidForm: isValidForm,
       sessionEpoch: sessionEpoch,
-      opacity: hasConfident ? 1.0 : 0.45,
+      exerciseMode: exerciseType == ExerciseType.pushUp
+          ? ExerciseMode.pushUp
+          : ExerciseMode.squat,
+      opacity: uncertain.length == joints.length ? 0.45 : 1.0,
     );
   }
 
-  /// Builds a [PoseOverlayState] for push-up mode: smooths shoulder/elbow/wrist
-  /// landmarks and returns an overlay with [ExerciseMode.pushUp].
-  PoseOverlayState _buildSmoothedArmOverlayState({
-    required Pose pose,
-    required Size imageSize,
-    required InputImageRotation rotation,
-    required bool isFrontCamera,
-    required bool isValidForm,
-    required int sessionEpoch,
-  }) {
-    final map = pose.landmarks;
-    final now = _clock();
-
-    ArmLandmarks? extractArmCandidate(
-      PoseLandmarkType shoulderType,
-      PoseLandmarkType elbowType,
-      PoseLandmarkType wristType,
-    ) {
-      final shoulder = map[shoulderType];
-      final elbow = map[elbowType];
-      final wrist = map[wristType];
-      if (shoulder == null || elbow == null || wrist == null) return null;
-      final rawArm = ArmLandmarks(
-        shoulder: PoseJointPoint(
-          imagePoint: Offset(shoulder.x, shoulder.y),
-          likelihood: shoulder.likelihood,
-        ),
-        elbow: PoseJointPoint(
-          imagePoint: Offset(elbow.x, elbow.y),
-          likelihood: elbow.likelihood,
-        ),
-        wrist: PoseJointPoint(
-          imagePoint: Offset(wrist.x, wrist.y),
-          likelihood: wrist.likelihood,
-        ),
-      );
-      if (!rawArm.isReliable(_armHysteresis.exitThreshold)) return null;
-
-      return ArmLandmarks(
-        shoulder: PoseJointPoint(
-          imagePoint: _smoothJoint(
-              shoulderType, rawArm.shoulder.imagePoint, imageSize, now),
-          likelihood: shoulder.likelihood,
-        ),
-        elbow: PoseJointPoint(
-          imagePoint: _smoothJoint(
-              elbowType, rawArm.elbow.imagePoint, imageSize, now),
-          likelihood: elbow.likelihood,
-        ),
-        wrist: PoseJointPoint(
-          imagePoint: _smoothJoint(
-              wristType, rawArm.wrist.imagePoint, imageSize, now),
-          likelihood: wrist.likelihood,
-        ),
-      );
-    }
-
-    final leftCandidate = extractArmCandidate(
-      PoseLandmarkType.leftShoulder,
-      PoseLandmarkType.leftElbow,
-      PoseLandmarkType.leftWrist,
-    );
-    final rightCandidate = extractArmCandidate(
-      PoseLandmarkType.rightShoulder,
-      PoseLandmarkType.rightElbow,
-      PoseLandmarkType.rightWrist,
-    );
-
-    final leftRes = _armHysteresis.update(
-      key: 'left',
-      candidate: leftCandidate,
-      minLikelihood: leftCandidate?.minLikelihood ?? 0.0,
-      now: now,
-    );
-    final rightRes = _armHysteresis.update(
-      key: 'right',
-      candidate: rightCandidate,
-      minLikelihood: rightCandidate?.minLikelihood ?? 0.0,
-      now: now,
-    );
-
-    if (!leftRes.isVisible && !rightRes.isVisible) {
-      return PoseOverlayState.empty;
-    }
-
-    final hasConfident = leftRes.isConfident || rightRes.isConfident;
-    return PoseOverlayState(
-      leftArm: leftRes.value,
-      rightArm: rightRes.value,
-      imageSize: imageSize,
-      rotation: rotation,
-      isFrontCamera: isFrontCamera,
-      isValidForm: isValidForm && hasConfident,
-      sessionEpoch: sessionEpoch,
-      exerciseMode: ExerciseMode.pushUp,
-      opacity: hasConfident ? 1.0 : 0.45,
-    );
-  }
+  String _pushUpHint(String feedback) => switch (feedback) {
+    'start' => _tr(
+      'Начни с прямых рук',
+      'Start with straight arms',
+      'Қолды түзу ұстап бастаңыз',
+    ),
+    'move' => _tr(
+      'Выполни повтор в обычном темпе',
+      'Do a rep at your usual pace',
+      'Жаттығуды әдеттегі қарқынмен орындаңыз',
+    ),
+    'hold' => _tr(
+      'Ненадолго задержись в нижней позиции',
+      'Hold the lower position briefly',
+      'Төменгі қалыпта сәл кідіріңіз',
+    ),
+    'holdTop' => _tr(
+      'На миг замри вверху',
+      'Hold the top briefly',
+      'Жоғарғы қалыпта сәл кідіріңіз',
+    ),
+    'arms' => _tr(
+      'Покажи обе руки целиком',
+      'Keep both arms visible',
+      'Екі қолыңыз да толық көрінсін',
+    ),
+    'hands' => _tr(
+      'Удерживай ладони на месте',
+      'Keep your hands in place',
+      'Алақандарыңызды орнында ұстаңыз',
+    ),
+    'tracking' => _tr(
+      'Поза плохо видна',
+      'Pose tracking uncertain',
+      'Дене қалпы анық көрінбейді',
+    ),
+    'raise' => _tr(
+      'Выпрями руки полностью',
+      'Press back up with straight arms',
+      'Қолыңызды толық жазыңыз',
+    ),
+    'complete' => _tr('Отлично!', 'Good rep!', 'Жарайсыз!'),
+    _ => _tr(
+      'Поставь телефон чуть выше пола, камерой к себе и немного вниз. Покажи кисти и стопы.',
+      'Set the phone just above the floor, facing you and tilted slightly down. Keep hands and feet in frame.',
+      'Телефонды еденнен сәл жоғары қойып, камераны өзіңізге және сәл төмен қаратыңыз. Қол мен аяқ кадрда болсын.',
+    ),
+  };
 
   /// Extracts the 2D interior knee angle using [SquatGeometry].
   @visibleForTesting
@@ -888,7 +778,12 @@ class ProductionChallengeController extends ChangeNotifier {
   }
 
   void _onCoordinatorState(CoordinatorState state) {
-    if (_disposed) return;
+    if (_disposed ||
+        _canceled ||
+        !_ownsSession ||
+        state.sessionId != _sessionId) {
+      return;
+    }
 
     if (state.sessionStatus == WorkoutSessionStatus.completed &&
         !_completionHandled) {
@@ -902,7 +797,10 @@ class ProductionChallengeController extends ChangeNotifier {
     }
 
     if (state.feedbackMessage != null && state.feedbackMessage!.isNotEmpty) {
-      _hint = state.feedbackMessage!;
+      _hint =
+          exerciseType == ExerciseType.pushUp && !state.sessionStatus.isTerminal
+          ? _pushUpHint(state.feedbackMessage!)
+          : state.feedbackMessage!;
     }
     if (state.errorMessage != null && state.errorMessage!.isNotEmpty) {
       _error = state.errorMessage;
@@ -914,24 +812,25 @@ class ProductionChallengeController extends ChangeNotifier {
     _completionHandled = true;
     _isFinalizing = true;
     _hint = _tr(
-      'Подтверждаем временный доступ…',
-      'Confirming temporary access…',
-      'Уақытша рұқсат расталуда…',
+      isUnlockChallenge
+          ? 'Подтверждаем временный доступ…'
+          : 'Сохраняем тренировку…',
+      isUnlockChallenge ? 'Confirming temporary access…' : 'Saving workout…',
+      isUnlockChallenge ? 'Уақытша рұқсат расталуда…' : 'Жаттығу сақталуда…',
     );
     _notify();
 
-    await _releaseCamera();
-    if (_disposed) return;
-
     try {
-      await _coordinator.waitForCompletion();
+      await Future.wait([
+        _coordinator.waitForCompletion(),
+        _releaseCamera(),
+      ]);
     } catch (e) {
-      if (!_disposed) {
-        _error = '$e';
-      }
+      if (!_disposed) _error = '$e';
     }
+    await _closePoseDetector();
 
-    if (_disposed) return;
+    if (_disposed || !_ownsSession) return;
     _isFinalizing = false;
     _syncConfirmedGrantState(_coordinator.currentState);
     _notify();
@@ -939,7 +838,7 @@ class ProductionChallengeController extends ChangeNotifier {
 
   void _syncConfirmedGrantState(CoordinatorState state) {
     if (state.challengeContext == ChallengeType.freeWorkout) {
-      _isFreeWorkoutCompleted = true;
+      _isFreeWorkoutCompleted = state.isWorkoutPersisted;
       return;
     }
 
@@ -947,8 +846,10 @@ class ProductionChallengeController extends ChangeNotifier {
         state.unlockUntil != null) {
       final remaining = state.unlockUntil!.difference(_clock());
       if (remaining > Duration.zero) {
-        _grantedMinutes =
-            (remaining.inMilliseconds / 60000).ceil().clamp(1, 15);
+        _grantedMinutes = (remaining.inMilliseconds / 60000).ceil().clamp(
+          1,
+          15,
+        );
         _isUnlockConfirmed = true;
         _error = null;
         return;
@@ -957,7 +858,8 @@ class ProductionChallengeController extends ChangeNotifier {
 
     if (state.accessGrantStatus == AccessGrantStatus.rejected ||
         state.accessGrantStatus == AccessGrantStatus.failed) {
-      _error = state.errorMessage ??
+      _error =
+          state.errorMessage ??
           _tr(
             'Не удалось подтвердить доступ.',
             'Could not confirm access.',
@@ -968,19 +870,20 @@ class ProductionChallengeController extends ChangeNotifier {
 
   /// Handles app backgrounding/foregrounding cleanly.
   Future<void> handleLifecycleChange(AppLifecycleState state) async {
-    if (_disposed) return;
-    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+    if (_disposed || _canceled) return;
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
       _foreground = false;
-      if (exerciseType == ExerciseType.pushUp) {
-        _pushUpPoseAdapter.processAngle(null);
-      } else {
-        _poseAdapter.processAngle(null);
+      _pushUpCounter?.interruptTracking();
+      if (_ownsSession) {
+        _pushUpPoseAdapter?.processPose(null, timestamp: _clock());
+        _poseAdapter?.processAngle(null);
       }
       await _releaseCamera();
       _notify();
     } else if (state == AppLifecycleState.resumed) {
       _foreground = true;
-      if (!_isTerminal && !_starting) {
+      if (!_isTerminal && _ownsSession) {
         await _ensureCameraPermissionAndOpen();
       }
     }
@@ -1010,21 +913,46 @@ class ProductionChallengeController extends ChangeNotifier {
     if (_disposed || _canceled || _isFinalizing) return;
     _canceled = true;
 
-    _coordinator.detachPoseEventSource();
+    _detachPoseSource();
     await _releaseCamera();
+    await _closePoseDetector();
+    await _endOwnedSession('Cancelled by user');
+    _notify();
+  }
+
+  void _detachPoseSource() {
+    final sessionId = _sessionId;
+    if (sessionId != null) {
+      _coordinator.detachPoseEventSource(sessionId: sessionId);
+    }
+  }
+
+  void releaseCompletedSession() {
+    if (_ownsSession && _coordinator.currentState.sessionStatus.isTerminal) {
+      _coordinator.releaseTerminalSession();
+    }
+  }
+
+  Future<void> _endOwnedSession(String reason) async {
+    final pendingStart = _sessionStart;
+    if (pendingStart != null) {
+      try {
+        await pendingStart;
+      } catch (_) {
+        return;
+      }
+    }
+    if (!_ownsSession) return;
 
     final status = _coordinator.currentState.sessionStatus;
     if (status == WorkoutSessionStatus.active ||
         status == WorkoutSessionStatus.preparing) {
       try {
-        await _coordinator.cancelCurrentSession(reason: 'Cancelled by user');
+        await _coordinator.cancelCurrentSession(reason: reason);
       } catch (_) {}
     }
 
-    if (_coordinator.currentState.sessionStatus.isTerminal) {
-      _coordinator.releaseTerminalSession();
-    }
-    _notify();
+    releaseCompletedSession();
   }
 
   void _notify() {
@@ -1041,31 +969,17 @@ class ProductionChallengeController extends ChangeNotifier {
 
     _coordinatorSub?.cancel();
     _coordinatorSub = null;
-    _coordinator.detachPoseEventSource();
+    _detachPoseSource();
 
-    final status = _coordinator.currentState.sessionStatus;
-    if (status == WorkoutSessionStatus.active ||
-        status == WorkoutSessionStatus.preparing) {
-      unawaited(
-        _coordinator
-            .cancelCurrentSession(reason: 'Challenge screen disposed')
-            .then<void>((_) {}, onError: (_) {})
-            .whenComplete(() {
-          if (_coordinator.currentState.sessionStatus.isTerminal) {
-            _coordinator.releaseTerminalSession();
-          }
-        }),
-      );
-    } else if (status.isTerminal) {
-      _coordinator.releaseTerminalSession();
-    }
-
-    _poseAdapter.dispose();
-    _pushUpPoseAdapter.dispose();
+    _poseAdapter?.dispose();
+    _pushUpPoseAdapter?.dispose();
     _poseOverlayNotifier.dispose();
-    unawaited(_poseDetector?.close());
-    _poseDetector = null;
-    unawaited(_releaseCamera());
+    unawaited(
+      _releaseCamera().then((_) async {
+        await _closePoseDetector();
+        await _endOwnedSession('Challenge screen disposed');
+      }),
+    );
 
     super.dispose();
   }

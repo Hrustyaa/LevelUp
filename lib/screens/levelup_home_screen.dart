@@ -2513,7 +2513,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
         children: [
           const Icon(Icons.directions_walk_rounded, color: _muted, size: 26),
           _gap(8),
-          _title(tr('Movement', 'Движение', 'Қозғалыс')),
+          _title(tr('Workout', 'Тренировка', 'Жаттығу')),
           _gap(5),
           _sub(
             widget.onMovement == null
@@ -2523,18 +2523,18 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
                     'Жаттығуды бастау үшін фокус қосулы кезде таңдалған қолданбаны ашыңыз.',
                   )
                 : tr(
-                    'Optional movement activity. Stop whenever you want.',
-                    'Добровольное движение. Можно остановиться в любой момент.',
-                    'Ерікті қозғалыс. Кез келген уақытта тоқтатуға болады.',
+                    'Optional workout. Stop whenever you want.',
+                    'Добровольная тренировка. Можно остановиться в любой момент.',
+                    'Ерікті жаттығу. Кез келген уақытта тоқтатуға болады.',
                   ),
           ),
           if (widget.onMovement != null) ...[
             _gap(12),
             _primary(
               tr(
-                'Open movement challenge',
-                'Открыть задание',
-                'Тапсырманы ашу',
+                'Open workout',
+                'Открыть тренировку',
+                'Жаттығуды ашу',
               ),
               _busy ? null : () => _action(widget.onMovement!),
             ),
@@ -2549,7 +2549,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
         children: [
           const Icon(Icons.self_improvement_rounded, color: _muted, size: 26),
           _gap(8),
-          _title(tr('Mindful break', 'Спокойная пауза', 'Тыныш үзіліс')),
+          _title(tr('Quick Reset', 'Короткая пауза', 'Қысқа үзіліс')),
           _gap(5),
           _sub(
             tr(
@@ -3617,7 +3617,7 @@ class _BreakState extends State<_BreakScreen> {
     appBar: AppBar(
       backgroundColor: _bg,
       foregroundColor: _ink,
-      title: Text(tr('Mindful break', 'Спокойная пауза', 'Тыныш үзіліс')),
+      title: Text(tr('Quick Reset', 'Короткая пауза', 'Қысқа үзіліс')),
     ),
     body: SafeArea(
       child: Center(

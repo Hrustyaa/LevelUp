@@ -5,6 +5,7 @@ import '../../data/repositories/workout_history_repository.dart';
 import '../../features/achievements/application/achievement_service.dart';
 import '../../features/achievements/models/achievement_state.dart';
 import '../../features/progress/application/progress_service.dart';
+import '../../features/progress/application/xp_reward_policy.dart';
 import '../../features/progress/models/level_info.dart';
 import '../../features/progress/models/progress_state.dart';
 import '../../features/progress/models/streak_info.dart';
@@ -13,6 +14,7 @@ import '../../features/statistics/application/statistics_service.dart';
 import '../../features/statistics/models/statistics_snapshot.dart';
 import '../../models/access_attempt_record.dart';
 import '../../models/challenge_type.dart';
+import '../../models/exercise_type.dart';
 import '../../models/workout_result.dart';
 
 /// Production adapter generating [DashboardInsights] from local SQLite repositories
@@ -78,13 +80,20 @@ class CoreInsightsAdapter {
 
     // Deduplicate by sessionId to guarantee zero double-counting.
     final workoutsBySession = <String, WorkoutResult>{};
+    final excludedSessions = <String>{};
+    const rewardPolicy = XpRewardPolicy();
     for (final w in rawWorkouts) {
+      if ((w.exerciseType == ExerciseType.pushUp && !rewardPolicy.evaluate(w).eligible) ||
+          const {'simulated', 'preview', 'ui_only', 'mock'}.contains(w.source)) {
+        excludedSessions.add(w.sessionId);
+        continue;
+      }
       workoutsBySession.putIfAbsent(w.sessionId, () => w);
     }
 
     final confirmedBySession = <String, AccessAttemptRecord>{};
     for (final a in rawAttempts) {
-      if (a.isConfirmed) {
+      if (a.isConfirmed && !excludedSessions.contains(a.sessionId)) {
         confirmedBySession.putIfAbsent(a.sessionId, () => a);
       }
     }
@@ -122,6 +131,7 @@ class CoreInsightsAdapter {
           ? confirmedBySession[w.sessionId]
           : null;
       final rewardXp = rewardsBySession[w.sessionId]?.xpAmount;
+      final exercise = w.exerciseType == ExerciseType.pushUp ? 'push-ups' : 'squats';
 
       if (confirmed != null) {
         events.add(
@@ -131,7 +141,7 @@ class CoreInsightsAdapter {
             at: (confirmed.confirmedAt ?? confirmed.attemptedAt).toLocal(),
             appName: targetName,
             minutes: (confirmed.durationSeconds / 60).round(),
-            detail: '${w.completedRepetitions} squats',
+            detail: '${w.completedRepetitions} $exercise',
             xp: rewardXp,
           ),
         );
@@ -145,7 +155,7 @@ class CoreInsightsAdapter {
                 ? targetName
                 : null,
             minutes: null,
-            detail: '${w.completedRepetitions} squats',
+            detail: '${w.completedRepetitions} $exercise',
             xp: rewardXp,
           ),
         );
