@@ -491,7 +491,7 @@ void main() {
       completer.complete(const DashboardInsights(historyReady: true));
       await tester.pump();
 
-      scope.dispose();
+      await scope.dispose();
     });
 
     testWidgets('7. Settings persist to real SQLite across restart without altering native target or active unlockUntil', (tester) async {

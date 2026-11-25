@@ -50,7 +50,12 @@ class _LiveChallengeScreenState extends State<LiveChallengeScreen>
   CameraController? _cameraController;
   CameraDescription? _cameraDescription;
   PoseDetector? _poseDetector;
-  late PoseEngineAdapter _poseAdapter;
+  final _poseAdapter = PoseEngineAdapter(isSimulated: true);
+  SquatCameraPoseAdapter? _cameraPoseAdapter;
+  String? _cameraSessionId;
+  int _cameraEpoch = 0;
+  bool _foreground = true;
+  Future<void> _cameraTransition = Future<void>.value();
   StreamSubscription<CoordinatorState>? _coordinatorSubscription;
   DevLabController? _controller;
 
@@ -66,9 +71,6 @@ class _LiveChallengeScreenState extends State<LiveChallengeScreen>
   void didChangeDependencies() {
     super.didChangeDependencies();
     _controller = DevLabScope.of(context);
-    _poseAdapter = PoseEngineAdapter(
-      isSimulated: _controller?.executionMode.isSimulation ?? false,
-    );
   }
 
   @override
@@ -77,20 +79,13 @@ class _LiveChallengeScreenState extends State<LiveChallengeScreen>
     WidgetsBinding.instance.addObserver(this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       final controller = DevLabScope.of(context);
 
       // Listen to reactive Coordinator updates
       _coordinatorSubscription = controller.coordinator.stateStream.listen((_) {
         if (mounted) setState(() {});
       });
-
-      // Initialize ML Kit PoseDetector
-      _poseDetector = PoseDetector(
-        options: PoseDetectorOptions(
-          mode: PoseDetectionMode.stream,
-          model: PoseDetectionModel.base,
-        ),
-      );
 
       _openCamera();
 
@@ -100,7 +95,7 @@ class _LiveChallengeScreenState extends State<LiveChallengeScreen>
             controller.coordinator.currentState.sessionStatus ==
                 WorkoutSessionStatus.preparing) {
           _poseAdapter.reset();
-          controller.coordinator.attachPoseEventSource(_poseAdapter);
+          _attachPoseSource(controller);
         } else {
           _startUnlockChallenge();
         }
@@ -119,33 +114,56 @@ class _LiveChallengeScreenState extends State<LiveChallengeScreen>
     WidgetsBinding.instance.removeObserver(this);
     _coordinatorSubscription?.cancel();
 
-    _controller?.coordinator.detachPoseEventSource();
+    _controller?.coordinator.detachPoseEventSource(sessionId: _cameraSessionId);
 
     _poseAdapter.dispose();
-    _poseDetector?.close();
-    _releaseCamera();
+    _cameraPoseAdapter?.dispose();
+    final detector = _poseDetector;
+    _poseDetector = null;
+    unawaited(_releaseCamera().then((_) async {
+      try {
+        await detector?.close();
+      } catch (_) {
+        // A disposed platform plugin has no remaining camera work.
+      }
+    }));
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+    if (state != AppLifecycleState.resumed) {
+      _foreground = false;
       _releaseCamera();
-    } else if (state == AppLifecycleState.resumed && mounted) {
+    } else if (mounted) {
+      _foreground = true;
       _openCamera();
       _controller?.refreshAll();
     }
   }
 
-  Future<void> _openCamera() async {
-    if (_cameraController != null || !mounted) return;
+  Future<void> _queueCameraTransition(Future<void> Function() action) {
+    final next = _cameraTransition.then((_) => action());
+    _cameraTransition = next.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return next;
+  }
 
+  bool _canOpenCamera(int epoch) =>
+      mounted && _foreground && epoch == _cameraEpoch;
+
+  Future<void> _openCamera() {
+    final epoch = _cameraEpoch;
+    return _queueCameraTransition(() => _openCameraForEpoch(epoch));
+  }
+
+  Future<void> _openCameraForEpoch(int epoch) async {
+    if (!_canOpenCamera(epoch) || _cameraController != null) return;
     try {
       final available = await availableCameras().timeout(
         const Duration(milliseconds: 1500),
         onTimeout: () => <CameraDescription>[],
       );
-      if (!mounted) return;
+      if (!_canOpenCamera(epoch)) return;
 
       if (available.isEmpty) {
         setState(() {
@@ -170,29 +188,37 @@ class _LiveChallengeScreenState extends State<LiveChallengeScreen>
       _cameraDescription = camera;
       await next.initialize();
 
-      if (!mounted || _cameraController != next) {
-        await next.dispose();
+      if (!_canOpenCamera(epoch)) {
+        await _closeCamera();
         return;
       }
 
-      await next.startImageStream(_onFrame);
+      await next.startImageStream((image) {
+        if (_canOpenCamera(epoch) && _cameraController == next) _onFrame(image);
+      });
 
-      if (mounted) {
+      if (_canOpenCamera(epoch)) {
         setState(() {
           _cameraError = null;
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (_canOpenCamera(epoch)) {
         setState(() {
           _cameraError = e.toString();
         });
       }
-      await _releaseCamera();
+      await _closeCamera();
     }
   }
 
-  Future<void> _releaseCamera() async {
+  Future<void> _releaseCamera() {
+    _cameraEpoch++;
+    _cameraPoseAdapter?.interruptTracking();
+    return _queueCameraTransition(_closeCamera);
+  }
+
+  Future<void> _closeCamera() async {
     final current = _cameraController;
     _cameraController = null;
     _cameraDescription = null;
@@ -249,87 +275,52 @@ class _LiveChallengeScreenState extends State<LiveChallengeScreen>
   }
 
   Future<void> _processFrame(InputImage input) async {
-    final detector = _poseDetector;
-    if (detector == null) return;
+    final detector = _poseDetector ??= PoseDetector(
+      options: PoseDetectorOptions(
+        mode: PoseDetectionMode.stream,
+        model: PoseDetectionModel.base,
+      ),
+    );
 
+    final epoch = _cameraEpoch;
+    final sessionId = _cameraSessionId;
     try {
       final poses = await detector.processImage(input);
-      if (!mounted) return;
+      if (!mounted || epoch != _cameraEpoch || sessionId != _cameraSessionId) return;
 
-      if (poses.isEmpty) {
-        setState(() {
-          _isTrackingValid = false;
-          _currentKneeAngle = null;
-          _feedbackMessage = 'Человек не найден — отойди дальше от телефона';
-        });
-        _poseAdapter.processAngle(null);
-        return;
-      }
-
-      final pose = poses.first;
-      final angle = _estimateKneeAngle(pose);
-
-      if (angle == null) {
-        setState(() {
-          _isTrackingValid = false;
-          _currentKneeAngle = null;
-          _feedbackMessage = 'Не вижу бедро, колено и стопу — повернись боком';
-        });
-        _poseAdapter.processAngle(null);
-        return;
-      }
-
-      // Valid frame evaluated
-      final result = _poseAdapter.processAngle(angle);
-
-      if (mounted) {
-        setState(() {
-          _isTrackingValid = true;
-          _currentKneeAngle = angle;
-          _currentPhase = result.phase;
-          _feedbackMessage = result.feedbackMessage;
-        });
-      }
+      final pose = poses.firstOrNull;
+      final result = _cameraPoseAdapter?.processPose(pose, timestamp: DateTime.now());
+      setState(() {
+        _isTrackingValid = result?.isValidTracking ?? false;
+        _currentKneeAngle = result?.kneeAngle ??
+            (pose == null ? null : SquatGeometry.estimateKneeAngle(pose));
+        _currentPhase = result?.phase ?? SquatPhase.up;
+        _feedbackMessage = result?.feedbackMessage ??
+            'Встань так, чтобы камера видела ноги и корпус';
+      });
     } catch (_) {
-      // Ignore individual frame ML Kit failures
+      if (!mounted || epoch != _cameraEpoch || sessionId != _cameraSessionId) return;
+      _cameraPoseAdapter?.processPose(null, timestamp: DateTime.now());
+      setState(() {
+        _isTrackingValid = false;
+        _currentKneeAngle = null;
+      });
     }
   }
 
-  double? _estimateKneeAngle(Pose pose) {
-    final map = pose.landmarks;
-
-    double? side(
-      PoseLandmarkType hipType,
-      PoseLandmarkType kneeType,
-      PoseLandmarkType ankleType,
-    ) {
-      final hip = map[hipType];
-      final knee = map[kneeType];
-      final ankle = map[ankleType];
-      if (hip == null || knee == null || ankle == null) return null;
-      if (hip.likelihood < SquatGeometry.defaultLikelihoodThreshold ||
-          knee.likelihood < SquatGeometry.defaultLikelihoodThreshold ||
-          ankle.likelihood < SquatGeometry.defaultLikelihoodThreshold) {
-        return null;
-      }
-
-      return SquatGeometry.calculateKneeAngle(
-        Offset(hip.x, hip.y),
-        Offset(knee.x, knee.y),
-        Offset(ankle.x, ankle.y),
-      );
+  void _attachPoseSource(DevLabController controller) {
+    if (!mounted) return;
+    if (controller.executionMode.isSimulation) {
+      controller.coordinator.attachPoseEventSource(_poseAdapter);
+      return;
     }
-
-    return side(
-          PoseLandmarkType.leftHip,
-          PoseLandmarkType.leftKnee,
-          PoseLandmarkType.leftAnkle,
-        ) ??
-        side(
-          PoseLandmarkType.rightHip,
-          PoseLandmarkType.rightKnee,
-          PoseLandmarkType.rightAnkle,
-        );
+    final sessionId = controller.coordinator.currentState.sessionId;
+    if (sessionId == null) return;
+    final adapter = SquatCameraPoseAdapter();
+    controller.coordinator.attachPoseEventSource(adapter, sessionId: sessionId);
+    _cameraPoseAdapter?.dispose();
+    _cameraSessionId = sessionId;
+    _cameraPoseAdapter = adapter;
   }
 
   Future<void> _startFreeWorkout() async {
@@ -355,7 +346,7 @@ class _LiveChallengeScreenState extends State<LiveChallengeScreen>
       );
       _poseAdapter.reset();
       await controller.coordinator.launchFreeWorkout();
-      controller.coordinator.attachPoseEventSource(_poseAdapter);
+      _attachPoseSource(controller);
     } catch (e) {
       controller.logService.error(
         BackendModuleId.sessionManager,
@@ -391,7 +382,7 @@ class _LiveChallengeScreenState extends State<LiveChallengeScreen>
       await controller.coordinator.launchUnlockChallenge(
         requirePendingRequest: !controller.executionMode.isSimulation,
       );
-      controller.coordinator.attachPoseEventSource(_poseAdapter);
+      _attachPoseSource(controller);
     } on InvalidChallengeRequestException {
       controller.logService.warning(
         BackendModuleId.sessionManager,
@@ -433,6 +424,9 @@ class _LiveChallengeScreenState extends State<LiveChallengeScreen>
         'Workout cancelled by user',
       );
       await controller.coordinator.cancelCurrentSession();
+      _cameraPoseAdapter?.dispose();
+      _cameraPoseAdapter = null;
+      _cameraSessionId = null;
       _poseAdapter.reset();
     } catch (e) {
       controller.logService.error(

@@ -46,6 +46,7 @@ class ProgressService implements IProgressService {
   final IProgressRepository _repository;
   final IWorkoutHistoryRepository? _historyRepository;
   final XpRewardPolicy _policy;
+  final bool requireCameraEvidence;
   final LevelCalculator _levelCalculator;
   final StreakCalculator _streakCalculator;
   final DateTime Function() _clock;
@@ -60,6 +61,7 @@ class ProgressService implements IProgressService {
   ProgressService({
     required IProgressRepository repository,
     IWorkoutHistoryRepository? historyRepository,
+    this.requireCameraEvidence = false,
     XpRewardPolicy policy = const XpRewardPolicy(),
     LevelCalculator levelCalculator = const LevelCalculator(),
     StreakCalculator streakCalculator = const StreakCalculator(),
@@ -109,6 +111,15 @@ class ProgressService implements IProgressService {
           duplicate: false,
           xpAwarded: 0,
           reason: 'ProgressService disposed',
+        );
+      }
+
+      if (requireCameraEvidence && !result.hasVerifiedCameraCompletion) {
+        return const XpRewardOutcome(
+          awarded: false,
+          duplicate: false,
+          xpAwarded: 0,
+          reason: 'The workout is missing live camera completion.',
         );
       }
 
@@ -170,23 +181,41 @@ class ProgressService implements IProgressService {
   Future<ProgressState> _loadStateFromRepository() async {
     await _reconcileMissingRewards();
 
-    final rewards = await _repository.getAllRewards();
-    final rawTotal = await _repository.getTotalXp();
+    final repository = _repository;
+    final summary = repository is SqliteProgressRepository
+        ? await repository.loadProgressSummary()
+        : await _loadInMemorySummary(repository);
+    final rawTotal = summary.totalXp;
     final safeTotal = rawTotal < 0 ? 0 : rawTotal;
 
     final levelInfo = _levelCalculator.calculate(safeTotal);
     final streakInfo = _streakCalculator.calculate(
-      rewards.map((r) => r.localDate),
+      summary.dates,
       now: _clock(),
     );
 
     return ProgressState(
       levelInfo: levelInfo,
       streakInfo: streakInfo,
-      recentRewards: rewards.take(20).toList(growable: false),
-      completedWorkoutCount: rewards.length,
+      recentRewards: summary.recent,
+      completedWorkoutCount: summary.workoutCount,
       isLoading: false,
       errorMessage: null,
+    );
+  }
+
+  Future<({
+    int totalXp,
+    int workoutCount,
+    List<XpRewardRecord> recent,
+    List<String> dates,
+  })> _loadInMemorySummary(IProgressRepository repository) async {
+    final rewards = await repository.getAllRewards();
+    return (
+      totalXp: await repository.getTotalXp(),
+      workoutCount: rewards.length,
+      recent: rewards.take(20).toList(growable: false),
+      dates: rewards.map((r) => r.localDate).toList(growable: false),
     );
   }
 
@@ -200,12 +229,18 @@ class ProgressService implements IProgressService {
     final historyRepo = _historyRepository;
     if (historyRepo == null) return;
 
-    final existingRewards = await _repository.getAllRewards();
-    final rewardedSessions = existingRewards.map((r) => r.sessionId).toSet();
-    final recentWorkouts = await historyRepo.getRecentWorkouts(limit: 50);
+    final Iterable<WorkoutResult> recentWorkouts;
+    if (historyRepo is WorkoutHistoryRepository) {
+      recentWorkouts = await historyRepo.getUnrewardedCameraWorkouts(epochMs);
+    } else {
+      final rewardedSessions = (await _repository.getAllRewards())
+          .map((record) => record.sessionId)
+          .toSet();
+      recentWorkouts = (await historyRepo.getRecentWorkouts(limit: 50))
+          .where((workout) => !rewardedSessions.contains(workout.sessionId));
+    }
 
     for (final workout in recentWorkouts) {
-      if (rewardedSessions.contains(workout.sessionId)) continue;
       if (workout.completedAt.toUtc().millisecondsSinceEpoch < epochMs) {
         continue;
       }

@@ -15,7 +15,6 @@ import 'package:levelup_test/features/achievements/data/achievement_repository.d
 import 'package:levelup_test/features/achievements/models/achievement_unlock_record.dart';
 import 'package:levelup_test/features/challenge/application/challenge_service.dart';
 import 'package:levelup_test/features/challenge/application/workout_session_manager.dart';
-import 'package:levelup_test/features/pose_detection/application/squat_counter.dart';
 import 'package:levelup_test/features/progress/application/progress_service.dart';
 import 'package:levelup_test/features/progress/data/progress_repository.dart';
 import 'package:levelup_test/features/settings/application/camera_permission_checker.dart';
@@ -33,6 +32,8 @@ import 'package:levelup_test/services/native_bridge.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+import '../support/verified_squat_frames.dart';
 
 class _StubFocusGateway implements DashboardFocusGateway {
   @override
@@ -679,18 +680,7 @@ void main() {
       final scope1 = (await tester.runAsync(bootScope))!;
       await tester.runAsync(() async {
         await scope1.coordinator.launchFreeWorkout();
-        await scope1.coordinator.handlePoseResult(
-          const SquatCounterResult(
-            repetitionCount: 5,
-            phase: SquatPhase.up,
-            kneeAngle: 170,
-            isValidTracking: true,
-            consecutiveDownFrames: 0,
-            consecutiveUpFrames: 2,
-            isRepetitionCompleted: true,
-            feedbackMessage: 'Repetition complete',
-          ),
-        );
+        await completeVerifiedSquats(scope1.coordinator);
         await Future<void>.delayed(const Duration(milliseconds: 50));
         await scope1.refresh();
       });

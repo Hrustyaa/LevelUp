@@ -50,15 +50,20 @@ final class WorkoutResult {
 
   /// Biomechanical verification source (e.g. 'camera', 'test').
   final String source;
-  final PushUpCompletion? pushUpCompletion;
+  final CameraWorkoutCompletion? cameraCompletion;
 
   bool get hasVerifiedPushUpCompletion =>
-      exerciseType == ExerciseType.pushUp &&
-      source == PushUpVerification.verifiedSource &&
-      pushUpCompletion?.identity == (
+      exerciseType == ExerciseType.pushUp && hasVerifiedCameraCompletion;
+
+  bool get hasVerifiedCameraCompletion =>
+      source == (exerciseType == ExerciseType.pushUp
+          ? PushUpVerification.verifiedSource
+          : 'camera') &&
+      cameraCompletion?.identity == (
         sessionId: sessionId,
         requestId: requestId,
         challengeId: challengeId,
+        exerciseType: exerciseType,
         targetPackage: targetPackage,
         repetitions: completedRepetitions,
       );
@@ -77,8 +82,10 @@ final class WorkoutResult {
     required this.accessDurationSeconds,
     this.earnedXp = 50,
     this.source = 'camera',
-    this.pushUpCompletion,
-  })  : assert(
+    CameraWorkoutCompletion? cameraCompletion,
+    PushUpCompletion? pushUpCompletion,
+  })  : cameraCompletion = cameraCompletion ?? pushUpCompletion,
+        assert(
           challengeContext != ChallengeType.freeWorkout ||
               (!eligibleForAccess && accessDurationSeconds == 0 && targetPackage == null),
           'Free workout must never produce an access grant or have a target package',

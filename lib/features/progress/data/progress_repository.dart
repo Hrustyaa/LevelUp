@@ -1,3 +1,5 @@
+import 'package:sqflite/sqflite.dart' show ConflictAlgorithm;
+
 import '../../../data/database/database_constants.dart';
 import '../../../data/database/levelup_database.dart';
 import '../models/xp_reward_record.dart';
@@ -78,6 +80,38 @@ class SqliteProgressRepository implements IProgressRepository {
     return rows.map(XpRewardRecord.fromMap).toList(growable: false);
   }
 
+  Future<({
+    int totalXp,
+    int workoutCount,
+    List<XpRewardRecord> recent,
+    List<String> dates,
+  })> loadProgressSummary() async {
+    final db = await _dbManager.database;
+    return db.transaction((txn) async {
+      final aggregate = (await txn.rawQuery(
+        'SELECT COUNT(*) AS workouts, COALESCE(SUM(${DatabaseConstants.colXpAmount}), 0) AS xp '
+        'FROM ${DatabaseConstants.tableXpRewards}',
+      )).single;
+      final recent = await txn.query(
+        DatabaseConstants.tableXpRewards,
+        orderBy: '${DatabaseConstants.colAwardedAt} DESC',
+        limit: 20,
+      );
+      final days = await txn.query(
+        DatabaseConstants.tableXpRewards,
+        distinct: true,
+        columns: [DatabaseConstants.colLocalDate],
+      );
+      return (
+        totalXp: (aggregate['xp'] as num).toInt(),
+        workoutCount: (aggregate['workouts'] as num).toInt(),
+        recent: recent.map(XpRewardRecord.fromMap).toList(growable: false),
+        dates: days.map((r) => r[DatabaseConstants.colLocalDate] as String)
+            .toList(growable: false),
+      );
+    });
+  }
+
   @override
   Future<int> getTotalXp() async {
     final db = await _dbManager.database;
@@ -132,6 +166,7 @@ class SqliteProgressRepository implements IProgressRepository {
           DatabaseConstants.colSettingsValue: defaultEpochMs.toString(),
           DatabaseConstants.colSettingsUpdatedAt: defaultEpochMs,
         },
+        conflictAlgorithm: ConflictAlgorithm.replace,
       );
       _cachedEpochMs = defaultEpochMs;
       return defaultEpochMs;

@@ -6,6 +6,8 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
+import 'main_ui.dart' as production;
+
 const native = MethodChannel('levelup_test/control');
 const accent = Color(0xFFC7FA5B);
 const background = Color(0xFF11161A);
@@ -16,10 +18,7 @@ const testApps = <String, String>{
   'com.zhiliaoapp.musically': 'TikTok',
 };
 
-void main() {
-  WidgetsFlutterBinding.ensureInitialized();
-  runApp(const LevelUpApp());
-}
+void main() => production.main();
 
 class LevelUpApp extends StatelessWidget {
   const LevelUpApp({super.key});

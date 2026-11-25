@@ -4,6 +4,8 @@ import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
 import '../../features/pose_detection/application/push_up_counter.dart';
 import '../../features/pose_detection/application/squat_counter.dart';
+import '../../features/pose_detection/application/squat_geometry.dart';
+import '../../models/exercise_type.dart';
 
 /// Contract for a source emitting verified pose tracking and repetition events.
 ///
@@ -57,79 +59,125 @@ class PoseEngineAdapter implements IPoseEventSource {
   }
 }
 
-typedef PushUpSessionIdentity = ({
+typedef CameraWorkoutIdentity = ({
   String sessionId,
   String requestId,
   String challengeId,
+  ExerciseType exerciseType,
   String? targetPackage,
   int repetitions,
 });
 
-/// Evidence issued when the live counter completes its bound workout.
-final class PushUpCompletion {
-  final PushUpSessionIdentity identity;
-
-  const PushUpCompletion._(this.identity);
+/// In-memory evidence issued by a session-bound counter from raw landmarks.
+final class CameraWorkoutCompletion {
+  final CameraWorkoutIdentity identity;
+  const CameraWorkoutCompletion._(this.identity);
 }
 
-/// Adapter that processes push-up poses through a [PushUpCounter] and exposes
-/// the results as an [IPoseEventSource].
-///
-/// Used when the active exercise is [ExerciseType.pushUp]. The coordinator
-/// consumes [SquatCounterResult] in both cases because the state machine
-/// structure is identical (top/bottom phases, repetition count, feedback).
-final class PushUpPoseAdapter implements IPoseEventSource {
-  final PushUpCounter _counter;
-  PushUpSessionIdentity? _identity;
-  PushUpCompletion? _completion;
+typedef PushUpCompletion = CameraWorkoutCompletion;
 
-  PushUpCompletion? get completion => _completion;
-  final StreamController<SquatCounterResult> _controller =
-      StreamController<SquatCounterResult>.broadcast();
+sealed class CameraPoseAdapter implements IPoseEventSource {
+  final _controller = StreamController<SquatCounterResult>.broadcast();
+  CameraWorkoutIdentity? _identity;
+  CameraWorkoutCompletion? _completion;
+
+  CameraWorkoutCompletion? get completion => _completion;
+  ExerciseType get exerciseType;
 
   @override
   final bool isSimulated;
-
-  PushUpPoseAdapter({
-    this.isSimulated = false,
-    void Function(String message)? onDiagnostic,
-  }) : _counter = PushUpCounter(onDiagnostic: onDiagnostic);
+  CameraPoseAdapter({this.isSimulated = false});
 
   @override
   Stream<SquatCounterResult> get poseStream => _controller.stream;
 
-  void bindToSession(PushUpSessionIdentity identity) {
+  void bindToSession(CameraWorkoutIdentity identity) {
     if (_identity == identity) return;
-    if (_identity != null || identity.repetitions != _counter.targetGoal) {
-      throw StateError('The push-up counter must match one workout session.');
+    if (_identity != null ||
+        identity.exerciseType != exerciseType ||
+        identity.repetitions != SquatThresholds.defaultGoal) {
+      throw StateError('The camera counter must match one workout session.');
     }
-    _counter.reset();
+    _reset();
     _identity = identity;
   }
 
   SquatCounterResult processPose(Pose? pose, {required DateTime timestamp}) {
-    final result = _counter.processPose(
-      pose,
-      timestamp: timestamp,
-      isSimulated: isSimulated,
-    );
+    final result = _process(pose, timestamp);
     if (!_controller.isClosed) {
       final identity = _identity;
       if (identity != null &&
           !result.isSimulated &&
           result.isRepetitionCompleted &&
           result.repetitionCount == identity.repetitions) {
-        _completion ??= PushUpCompletion._(identity);
+        _completion ??= CameraWorkoutCompletion._(identity);
       }
       _controller.add(result);
     }
     return result;
   }
 
-  void interruptTracking() => _counter.interruptTracking();
+  SquatCounterResult _process(Pose? pose, DateTime timestamp);
+  void _reset();
+  void interruptTracking();
 
   @override
-  void dispose() {
-    _controller.close();
+  void dispose() => _controller.close();
+}
+
+final class SquatCameraPoseAdapter extends CameraPoseAdapter {
+  final _counter = SquatCounter();
+  DateTime? _lastTrackedAt;
+
+  SquatCameraPoseAdapter({super.isSimulated});
+
+  @override
+  ExerciseType get exerciseType => ExerciseType.squats;
+
+  @override
+  SquatCounterResult _process(Pose? pose, DateTime timestamp) {
+    final last = _lastTrackedAt;
+    if (last != null &&
+        (timestamp.isBefore(last) ||
+            timestamp.difference(last) > const Duration(milliseconds: 500))) {
+      interruptTracking();
+    }
+    final angle = pose == null ? null : SquatGeometry.estimateKneeAngle(pose);
+    if (angle != null) _lastTrackedAt = timestamp;
+    return _counter.processAngle(angle, isSimulated: isSimulated);
   }
+
+  @override
+  void _reset() {
+    _lastTrackedAt = null;
+    _counter.reset();
+  }
+
+  @override
+  void interruptTracking() {
+    _lastTrackedAt = null;
+    _counter.interruptTracking();
+  }
+}
+
+final class PushUpPoseAdapter extends CameraPoseAdapter {
+  final PushUpCounter _counter;
+
+  PushUpPoseAdapter({
+    super.isSimulated,
+    void Function(String message)? onDiagnostic,
+  }) : _counter = PushUpCounter(onDiagnostic: onDiagnostic);
+
+  @override
+  ExerciseType get exerciseType => ExerciseType.pushUp;
+
+  @override
+  SquatCounterResult _process(Pose? pose, DateTime timestamp) =>
+      _counter.processPose(pose, timestamp: timestamp, isSimulated: isSimulated);
+
+  @override
+  void _reset() => _counter.reset();
+
+  @override
+  void interruptTracking() => _counter.interruptTracking();
 }

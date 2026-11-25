@@ -34,10 +34,11 @@ class SqliteStatisticsRepository implements IStatisticsRepository {
 
   static const String _legacySquatSourceFilter =
       "(${DatabaseConstants.colVerificationSource} IS NULL OR "
-      "${DatabaseConstants.colVerificationSource} NOT IN ('simulated', 'preview', 'ui_only', 'mock', 'experimental_unverified', '${PushUpVerification.verifiedSource}'))";
+      "${DatabaseConstants.colVerificationSource} = 'camera')";
 
   static const String _trustedWorkoutFilter = """
     ((${DatabaseConstants.colExerciseType} = 'squats'
+       AND ${DatabaseConstants.colCompletedRepetitions} >= 5
        AND $_legacySquatSourceFilter)
       OR (${DatabaseConstants.colExerciseType} = 'pushUp'
        AND ${DatabaseConstants.colCompletedRepetitions} = 5

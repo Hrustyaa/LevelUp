@@ -228,11 +228,14 @@ class NativeBridge implements INativeBridge {
   }
 
   @override
-  Future<DateTime> grantAccess({int minutes = 5}) async {
+  Future<DateTime> grantAccess({int minutes = 5, String? expectedTarget}) async {
     try {
       final unlockUntilMs = await _channel.invokeMethod<num>(
         ChannelConstants.methodGrantAccess,
-        {ChannelConstants.argMinutes: minutes},
+        {
+          ChannelConstants.argMinutes: minutes,
+          ChannelConstants.argTarget: ?expectedTarget,
+        },
       );
 
       if (unlockUntilMs == null || unlockUntilMs <= 0) {

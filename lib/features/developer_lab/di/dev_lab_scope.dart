@@ -205,7 +205,10 @@ class DevLabController extends ChangeNotifier {
     challengeService = ChallengeService();
     sessionManager = WorkoutSessionManager(challengeService: challengeService);
     accessService = AccessService(bridge: nativeBridge);
-    workoutHistoryRepository = WorkoutHistoryRepository(databaseManager: database);
+    workoutHistoryRepository = WorkoutHistoryRepository(
+      databaseManager: database,
+      requireCameraEvidence: nativeBridge is NativeBridge,
+    );
     accessAttemptRepository = AccessAttemptRepository(databaseManager: database);
 
     coordinator = CoreIntegrationCoordinator(
@@ -342,19 +345,27 @@ class DevLabController extends ChangeNotifier {
     coordinator.detachPoseEventSource();
 
     // 2. Tear down old services and switch
-    _disposeServices();
+    await _disposeServices();
+    if (_isDisposed) return;
     _executionMode = newMode;
     _initializeServices();
     await refreshAll();
   }
 
-  void _disposeServices() {
+  Future<void> _disposeServices() async {
     coordinator.dispose();
     sessionManager.dispose();
     focusService.dispose();
     accessService.dispose();
     settingsService.dispose();
-    database.close();
+    // An injected database belongs to its caller, including test fixtures.
+    if (!identical(database, _customDatabase)) {
+      try {
+        await database.close();
+      } catch (error) {
+        debugPrint('Could not close the Developer Lab database: $error');
+      }
+    }
   }
 
   bool _isDisposed = false;
@@ -362,7 +373,7 @@ class DevLabController extends ChangeNotifier {
   @override
   void dispose() {
     _isDisposed = true;
-    _disposeServices();
+    unawaited(_disposeServices());
     logService.dispose();
     super.dispose();
   }

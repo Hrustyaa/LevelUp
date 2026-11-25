@@ -44,7 +44,7 @@ void main() {
   });
 
   tearDown(() async {
-    database.close();
+    await database.close();
     if (tempDir.existsSync()) {
       try {
         tempDir.deleteSync(recursive: true);
@@ -222,11 +222,11 @@ void main() {
       });
 
       final bridge = SimulationBridge(
-        initialStatus: const NativeFocusStatus(
-          targetPackage: ChannelConstants.targetInstagram,
+        initialStatus: NativeFocusStatus(
+          targetPackage: ChannelConstants.targetYouTube,
           isGateEnabled: true,
-          permissionStatus: NativePermissionStatus(isAccessibilityGranted: true),
-          accessStatus: NativeAccessStatus(), // Expired
+          permissionStatus: const NativePermissionStatus(isAccessibilityGranted: true),
+          accessStatus: NativeAccessStatus(unlockUntil: DateTime.now().add(const Duration(minutes: 5))),
         ),
       );
 

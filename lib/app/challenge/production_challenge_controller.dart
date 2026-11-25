@@ -57,8 +57,7 @@ class ProductionChallengeController extends ChangeNotifier {
   final ExerciseType exerciseType;
   final String language;
   final String? _unlockSessionId;
-  late final PoseEngineAdapter? _poseAdapter;
-  late final PushUpPoseAdapter? _pushUpPoseAdapter;
+  late final CameraPoseAdapter _poseAdapter;
   final Future<List<CameraDescription>> Function()? _availableCamerasOverride;
   final CameraControllerFactory? _cameraControllerFactory;
   final PoseProcessor? _poseProcessorOverride;
@@ -70,6 +69,7 @@ class ProductionChallengeController extends ChangeNotifier {
   StreamSubscription<CoordinatorState>? _coordinatorSub;
   Future<void> _cameraTransition = Future<void>.value();
   Future<void>? _sessionStart;
+  Timer? _cameraStartupTimer;
   String? _sessionId;
 
   bool _disposed = false;
@@ -107,7 +107,6 @@ class ProductionChallengeController extends ChangeNotifier {
     this.exerciseType = ExerciseType.squats,
     this.language = 'ru',
     String? unlockSessionId,
-    PoseEngineAdapter? poseAdapter,
     Future<List<CameraDescription>> Function()? availableCamerasOverride,
     CameraControllerFactory? cameraControllerFactory,
     PoseProcessor? poseProcessorOverride,
@@ -121,8 +120,7 @@ class ProductionChallengeController extends ChangeNotifier {
        _poseProcessorOverride = poseProcessorOverride,
        _clock = clock ?? DateTime.now {
     final pushUps = exerciseType == ExerciseType.pushUp;
-    _poseAdapter = pushUps ? null : poseAdapter ?? PoseEngineAdapter();
-    _pushUpPoseAdapter = pushUps
+    _poseAdapter = pushUps
         ? PushUpPoseAdapter(
             onDiagnostic:
                 kDebugMode &&
@@ -130,7 +128,7 @@ class ProductionChallengeController extends ChangeNotifier {
                 ? (message) => debugPrint('LevelUp push-up: $message')
                 : null,
           )
-        : null;
+        : SquatCameraPoseAdapter();
   }
 
   // Exposed UI state
@@ -186,9 +184,8 @@ class ProductionChallengeController extends ChangeNotifier {
 
       _coordinatorSub ??= _coordinator.stateStream.listen(_onCoordinatorState);
 
-      _poseAdapter?.reset();
       _coordinator.attachPoseEventSource(
-        _pushUpPoseAdapter ?? _poseAdapter!,
+        _poseAdapter,
         sessionId: _sessionId,
       );
       await _ensureCameraPermissionAndOpen();
@@ -245,7 +242,29 @@ class ProductionChallengeController extends ChangeNotifier {
     final epoch = _sessionEpoch;
     return _queueCameraTransition(() async {
       if (!_canOpenCamera(epoch) || _cameraController != null) return;
-      await _checkCameraPermissionAndOpen(epoch);
+      _cameraStartupTimer = Timer(const Duration(seconds: 10), () {
+        if (!_canOpenCamera(epoch)) return;
+        _error = _tr(
+          'Камера долго запускается.',
+          'The camera is taking too long to start.',
+          'Камера ұзақ іске қосылып жатыр.',
+        );
+        _notify();
+      });
+      try {
+        await _checkCameraPermissionAndOpen(epoch);
+      } catch (_) {
+        if (!_canOpenCamera(epoch)) return;
+        _error = _tr(
+          'Не удалось проверить доступ к камере.',
+          'Could not check camera access.',
+          'Камераға рұқсатты тексеру мүмкін болмады.',
+        );
+        _notify();
+      } finally {
+        _cameraStartupTimer?.cancel();
+        _cameraStartupTimer = null;
+      }
     });
   }
 
@@ -375,6 +394,7 @@ class ProductionChallengeController extends ChangeNotifier {
   }
 
   Future<void> _releaseCamera() {
+    _cameraStartupTimer?.cancel();
     _sessionEpoch++;
     _clearPoseOverlay();
     _trackingReady = false;
@@ -450,7 +470,7 @@ class ProductionChallengeController extends ChangeNotifier {
   }
 
   /// Processes an [InputImage] through ML Kit [PoseDetector] (or test override),
-  /// evaluates knee angle via [SquatGeometry], and forwards to [PoseEngineAdapter].
+  /// and feeds raw landmarks to the selected camera counter.
   @visibleForTesting
   Future<void> processInputImage(InputImage input) async {
     final epoch = _sessionEpoch;
@@ -484,10 +504,8 @@ class ProductionChallengeController extends ChangeNotifier {
         );
         if (exerciseType == ExerciseType.pushUp) {
           _hint = _pushUpHint('tracking');
-          _pushUpPoseAdapter!.processPose(null, timestamp: _clock());
-        } else {
-          _poseAdapter!.processAngle(null);
         }
+        _poseAdapter.processPose(null, timestamp: _clock());
         _notify();
         return;
       }
@@ -501,9 +519,7 @@ class ProductionChallengeController extends ChangeNotifier {
           (_cameraDescription?.lensDirection ?? CameraLensDirection.front) ==
           CameraLensDirection.front;
       final pushUp = exerciseType == ExerciseType.pushUp;
-      final result = pushUp
-          ? _pushUpPoseAdapter!.processPose(pose, timestamp: poseTime)
-          : _poseAdapter!.processAngle(estimateKneeAngle(pose));
+      final result = _poseAdapter.processPose(pose, timestamp: poseTime);
       _trackingReady = result.isValidTracking;
       _hint = pushUp
           ? _pushUpHint(result.feedbackMessage)
@@ -529,7 +545,12 @@ class ProductionChallengeController extends ChangeNotifier {
       if (!_disposed) _poseOverlayNotifier.value = overlay;
       _notify();
     } catch (_) {
-      // Ignore transient single-frame ML Kit errors
+      if (!_canOpenCamera(epoch)) return;
+      _trackingReady = false;
+      _clearPoseOverlay();
+      _poseAdapter.processPose(null, timestamp: _clock());
+      _hint = _pushUpHint('tracking');
+      _notify();
     }
   }
 
@@ -721,45 +742,6 @@ class ProductionChallengeController extends ChangeNotifier {
     ),
   };
 
-  /// Extracts the 2D interior knee angle using [SquatGeometry].
-  @visibleForTesting
-  static double? estimateKneeAngle(Pose pose) {
-    final map = pose.landmarks;
-
-    double? side(
-      PoseLandmarkType hipType,
-      PoseLandmarkType kneeType,
-      PoseLandmarkType ankleType,
-    ) {
-      final hip = map[hipType];
-      final knee = map[kneeType];
-      final ankle = map[ankleType];
-      if (hip == null || knee == null || ankle == null) return null;
-      if (hip.likelihood < SquatGeometry.defaultLikelihoodThreshold ||
-          knee.likelihood < SquatGeometry.defaultLikelihoodThreshold ||
-          ankle.likelihood < SquatGeometry.defaultLikelihoodThreshold) {
-        return null;
-      }
-
-      return SquatGeometry.calculateKneeAngle(
-        Offset(hip.x, hip.y),
-        Offset(knee.x, knee.y),
-        Offset(ankle.x, ankle.y),
-      );
-    }
-
-    return side(
-          PoseLandmarkType.leftHip,
-          PoseLandmarkType.leftKnee,
-          PoseLandmarkType.leftAnkle,
-        ) ??
-        side(
-          PoseLandmarkType.rightHip,
-          PoseLandmarkType.rightKnee,
-          PoseLandmarkType.rightAnkle,
-        );
-  }
-
   void _onCoordinatorState(CoordinatorState state) {
     if (_disposed ||
         _canceled ||
@@ -857,10 +839,9 @@ class ProductionChallengeController extends ChangeNotifier {
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
       _foreground = false;
-      _pushUpPoseAdapter?.interruptTracking();
+      _poseAdapter.interruptTracking();
       if (_ownsSession) {
-        _pushUpPoseAdapter?.processPose(null, timestamp: _clock());
-        _poseAdapter?.processAngle(null);
+        _poseAdapter.processPose(null, timestamp: _clock());
       }
       await _releaseCamera();
       _notify();
@@ -954,8 +935,7 @@ class ProductionChallengeController extends ChangeNotifier {
     _coordinatorSub = null;
     _detachPoseSource();
 
-    _poseAdapter?.dispose();
-    _pushUpPoseAdapter?.dispose();
+    _poseAdapter.dispose();
     _poseOverlayNotifier.dispose();
     unawaited(
       _releaseCamera().then((_) async {

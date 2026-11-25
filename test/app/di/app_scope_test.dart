@@ -84,7 +84,7 @@ void main() {
       expect(scope.focusService.currentState?.selectedTarget, ChannelConstants.targetYouTube);
       expect(methodCalls, isNot(contains(ChannelConstants.methodGrantAccess)));
 
-      scope.dispose();
+      await scope.dispose();
       expect(database.isOpen, isFalse);
     });
 
@@ -107,7 +107,7 @@ void main() {
       expect(scope.settingsService.currentState.isAccessibilityGranted, isTrue);
       expect(scope.focusService.currentState?.isAccessibilityGranted, isTrue);
 
-      scope.dispose();
+      await scope.dispose();
     });
 
     testWidgets('3. AppScopeProvider exposes AppScope via BuildContext', (tester) async {
@@ -133,7 +133,7 @@ void main() {
       );
 
       expect(resolvedScope, same(scope));
-      scope.dispose();
+      await scope.dispose();
     });
 
     test('4. AppScope.production() wires DefaultCameraPermissionChecker to NativeBridge without dialogs', () async {
@@ -150,7 +150,7 @@ void main() {
       expect(states[LevelUpPermission.usage], PermissionState.unavailable);
       expect(states[LevelUpPermission.notifications], PermissionState.unavailable);
 
-      scope.dispose();
+      await scope.dispose();
     });
 
     test('5. initialize() records initializationError and stays uninitialized on failure', () async {
@@ -164,7 +164,7 @@ void main() {
       expect(scope.isInitialized, isFalse);
       expect(scope.initializationError, isNotNull);
 
-      scope.dispose();
+      await scope.dispose();
     });
   });
 }

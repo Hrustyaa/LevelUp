@@ -41,6 +41,7 @@ class WorkoutResultScreen extends StatefulWidget {
 class _WorkoutResultScreenState extends State<WorkoutResultScreen>
     with WidgetsBindingObserver {
   Timer? _countdownTicker;
+  int _loadGeneration = 0;
   bool _isLoading = true;
   String? _loadError;
 
@@ -76,7 +77,11 @@ class _WorkoutResultScreenState extends State<WorkoutResultScreen>
     _countdownTicker?.cancel();
     _countdownTicker = null;
     final controller = DevLabScope.of(context);
-    setState(() => _isLoading = true);
+    final generation = ++_loadGeneration;
+    setState(() {
+      _isLoading = true;
+      _loadError = null;
+    });
 
     try {
       // 1. Resolve session ID
@@ -86,36 +91,42 @@ class _WorkoutResultScreenState extends State<WorkoutResultScreen>
           controller.coordinator.currentState.sessionId ??
           controller.sessionManager.currentSession?.sessionId;
 
+      WorkoutResult? workout;
+      AccessAttemptRecord? attempt;
       if (targetSessionId != null) {
-        _persistedWorkout = await controller.workoutHistoryRepository
+        workout = await controller.workoutHistoryRepository
             .getWorkoutBySessionId(targetSessionId);
-        _persistedAttempt = await controller.accessAttemptRepository
+        attempt = await controller.accessAttemptRepository
             .getAttemptBySessionId(targetSessionId);
       } else {
-        // Fallback: check most recent workout from SQLite
         final recents = await controller.workoutHistoryRepository.getRecentWorkouts(limit: 1);
-        if (recents.isNotEmpty) {
-          _persistedWorkout = recents.first;
-          _persistedAttempt = await controller.accessAttemptRepository
-              .getAttemptBySessionId(_persistedWorkout!.sessionId);
+        workout = recents.firstOrNull;
+        if (workout != null) {
+          attempt = await controller.accessAttemptRepository
+              .getAttemptBySessionId(workout.sessionId);
         }
       }
 
-      // 2. Query live native access status
-      final nativeStatus = await controller.accessService.getAccessStatus();
-      _nativeUnlockUntil = nativeStatus.unlockUntil;
-      _isNativeAccessActive = nativeStatus.isAccessActive();
+      final nativeStatus = await controller.nativeBridge.getState();
+      if (!mounted || generation != _loadGeneration) return;
+      _persistedWorkout = workout;
+      _persistedAttempt = attempt;
+      final nativeExpiry = nativeStatus.accessStatus.unlockUntil;
+      final matchesAttempt = attempt != null && attempt.isConfirmed &&
+          nativeStatus.targetPackage == attempt.targetPackage &&
+          nativeExpiry?.millisecondsSinceEpoch == attempt.unlockUntil?.millisecondsSinceEpoch;
+      _nativeUnlockUntil = matchesAttempt ? nativeExpiry : null;
+      _isNativeAccessActive = matchesAttempt && nativeStatus.accessStatus.isAccessActive();
 
-      // 3. Resolve active session from session manager if available
       final current = controller.sessionManager.currentSession;
-      if (current != null &&
-          (targetSessionId == null || current.sessionId == targetSessionId)) {
-        _activeSession = current;
-      }
+      _activeSession = current != null &&
+              (targetSessionId == null || current.sessionId == targetSessionId)
+          ? current
+          : null;
     } catch (e) {
-      _loadError = e.toString();
+      if (mounted && generation == _loadGeneration) _loadError = e.toString();
     } finally {
-      if (mounted) {
+      if (mounted && generation == _loadGeneration) {
         setState(() => _isLoading = false);
         // Start countdown ticker only when there is an active timed access window in the future.
         // This prevents the timer from keeping the Flutter clock busy in tests

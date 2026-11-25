@@ -55,6 +55,10 @@ class AppScope {
   late final CoreInsightsAdapter insightsAdapter;
 
   bool _initialized = false;
+  bool _disposed = false;
+  Future<void>? _initializing;
+  Future<void>? _refreshing;
+  Future<void>? _disposal;
   bool get isInitialized => _initialized;
   Object? _initializationError;
   Object? get initializationError => _initializationError;
@@ -89,6 +93,7 @@ class AppScope {
         ProgressService(
           repository: this.progressRepository,
           historyRepository: workoutHistoryRepository,
+          requireCameraEvidence: nativeBridge is NativeBridge,
         );
     this.statisticsRepository =
         statisticsRepository ?? SqliteStatisticsRepository(databaseManager: database);
@@ -154,6 +159,7 @@ class AppScope {
 
     final historyRepo = WorkoutHistoryRepository(
       databaseManager: effectiveDb,
+      requireCameraEvidence: effectiveBridge is NativeBridge,
     );
     final accessRepo = AccessAttemptRepository(
       databaseManager: effectiveDb,
@@ -164,6 +170,7 @@ class AppScope {
     final progressService = ProgressService(
       repository: progressRepo,
       historyRepository: historyRepo,
+      requireCameraEvidence: effectiveBridge is NativeBridge,
       clock: effectiveClock,
     );
     final statisticsRepo = SqliteStatisticsRepository(
@@ -230,13 +237,18 @@ class AppScope {
   }
 
   /// Authoritatively initializes core engines and loads persisted preferences.
-  Future<void> initialize() async {
-    if (_initialized) return;
+  Future<void> initialize() {
+    if (_initialized || _disposed) return Future.value();
+    return _initializing ??= _initialize().whenComplete(() => _initializing = null);
+  }
+
+  Future<void> _initialize() async {
     _initializationError = null;
 
     try {
       // 1. Initialize SQLite database and open connection
       await database.database;
+      if (_disposed) return;
 
       // 2. Initialize Settings and Focus engines
       final settingsState = await settingsService.initialize();
@@ -244,6 +256,7 @@ class AppScope {
         throw StateError(settingsState.errorMessage!);
       }
       await focusService.refreshState();
+      if (_disposed) return;
 
       // 3. Initialize Integration Coordinator, Progress, Statistics & Achievements Engines
       await progressService.initialize();
@@ -251,7 +264,7 @@ class AppScope {
       await achievementService.initialize();
       await coordinator.initialize();
 
-      _initialized = true;
+      _initialized = !_disposed;
     } catch (error) {
       _initializationError = error;
       _initialized = false;
@@ -260,16 +273,30 @@ class AppScope {
   }
 
   /// Refreshes native synchronization (e.g. after returning from Android Settings).
-  Future<void> refresh() async {
+  Future<void> refresh() {
+    if (_disposed) return Future.value();
+    return _refreshing ??= _refresh().whenComplete(() => _refreshing = null);
+  }
+
+  Future<void> _refresh() async {
+    final initializing = _initializing;
+    if (initializing != null) await initializing;
+    if (_disposed) return;
     await settingsService.refresh();
+    if (_disposed) return;
     await focusService.refreshState();
+    if (_disposed) return;
     await progressService.refresh();
+    if (_disposed) return;
     await statisticsService.refresh();
-    await achievementService.evaluateAndRefresh();
+    if (!_disposed) await achievementService.evaluateAndRefresh();
   }
 
   /// Disposes resources held by the engines.
-  void dispose() {
+  Future<void> dispose() => _disposal ??= _dispose();
+
+  Future<void> _dispose() async {
+    _disposed = true;
     coordinator.dispose();
     sessionManager.dispose();
     achievementService.dispose();
@@ -277,7 +304,25 @@ class AppScope {
     progressService.dispose();
     settingsService.dispose();
     focusService.dispose();
-    database.close();
+    accessService.dispose();
+    await _closeDatabase();
+  }
+
+  Future<void> _closeDatabase() async {
+    try {
+      await Future.wait<void>([
+        ?_initializing,
+        ?_refreshing,
+        coordinator.waitForCompletion(),
+      ]);
+    } catch (_) {
+      // The operations report their own failures. Connection cleanup still runs.
+    }
+    try {
+      await database.close();
+    } catch (error) {
+      debugPrint('Could not close the LevelUp database: $error');
+    }
   }
 
   /// Convenience lookup on [BuildContext] using [AppScopeProvider].

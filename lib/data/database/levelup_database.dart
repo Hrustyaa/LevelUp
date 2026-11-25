@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
@@ -12,7 +10,8 @@ class LevelUpDatabase {
   final String? _customPath;
 
   Database? _db;
-  Completer<Database>? _openCompleter;
+  Future<Database>? _opening;
+  Future<void>? _closing;
 
   /// Creates a [LevelUpDatabase] manager.
   ///
@@ -32,27 +31,13 @@ class LevelUpDatabase {
 
   /// Retrieves the active database connection, opening it if not yet open.
   Future<Database> get database async {
-    if (_db != null && _db!.isOpen) {
-      return _db!;
-    }
-
-    if (_openCompleter != null) {
-      return _openCompleter!.future;
-    }
-
-    _openCompleter = Completer<Database>();
-
-    try {
-      final db = await _open();
+    final closing = _closing;
+    if (closing != null) await closing;
+    if (isOpen) return _db!;
+    return _opening ??= _open().then((db) {
       _db = db;
-      _openCompleter!.complete(db);
       return db;
-    } catch (e, stack) {
-      _openCompleter!.completeError(e, stack);
-      rethrow;
-    } finally {
-      _openCompleter = null;
-    }
+    }).whenComplete(() => _opening = null);
   }
 
   Future<Database> _open() async {
@@ -154,11 +139,18 @@ class LevelUpDatabase {
   }
 
   /// Closes the database connection if open.
-  Future<void> close() async {
+  Future<void> close() => _closing ??= _closeAfterOpen()
+      .whenComplete(() => _closing = null);
+
+  Future<void> _closeAfterOpen() async {
+    final opening = _opening;
+    try {
+      if (opening != null) await opening;
+    } catch (_) {
+      // The open caller observes the failure. There may be nothing to close.
+    }
     final db = _db;
     _db = null;
-    if (db != null && db.isOpen) {
-      await db.close();
-    }
+    if (db != null && db.isOpen) await db.close();
   }
 }

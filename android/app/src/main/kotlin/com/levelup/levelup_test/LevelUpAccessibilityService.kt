@@ -219,15 +219,15 @@ class LevelUpAccessibilityService : AccessibilityService() {
         root.findViewById<TextView>(R.id.gate_target_app).text = appName
         root.findViewById<TextView>(R.id.gate_challenge_title).text = tr(
             lang,
-            en = "Squat Challenge · 5 reps",
-            ru = "Приседания · 5 повторений",
-            kk = "Отырып-тұру · 5 рет",
+            en = "Exercise Challenge · 5 reps",
+            ru = "Упражнение · 5 повторений",
+            kk = "Жаттығу · 5 рет",
         )
         root.findViewById<TextView>(R.id.gate_challenge_subtitle).text = tr(
             lang,
-            en = "Earn 5 minutes of access by completing 5 verified squats.",
-            ru = "Выполни 5 приседаний с проверкой, чтобы получить 5 минут доступа.",
-            kk = "5 минут рұқсат алу үшін 5 отырып-тұру жасаңыз.",
+            en = "Earn 5 minutes of access by completing 5 verified reps.",
+            ru = "Выполни 5 повторений с проверкой, чтобы получить 5 минут доступа.",
+            kk = "5 минут рұқсат алу үшін жаттығуды 5 рет орындаңыз.",
         )
 
         root.findViewById<Button>(R.id.gate_start_button).apply {
@@ -238,7 +238,7 @@ class LevelUpAccessibilityService : AccessibilityService() {
                 kk = "Тапсырманы бастау",
             )
             setOnClickListener {
-                prefs.edit().putBoolean("open_challenge", true).apply()
+                prefs.edit().putString("open_challenge_target", target).apply()
                 beginNavigationAwayFromGate()
                 try {
                     startActivity(
@@ -252,7 +252,7 @@ class LevelUpAccessibilityService : AccessibilityService() {
                     )
                 } catch (e: Exception) {
                     Log.e(TAG, "Cannot launch challenge", e)
-                    prefs.edit().putBoolean("open_challenge", false).apply()
+                    prefs.edit().remove("open_challenge_target").apply()
                     performGlobalAction(GLOBAL_ACTION_HOME)
                 }
             }

@@ -9,8 +9,6 @@ import 'package:levelup_test/app/challenge/production_challenge_screen.dart';
 import 'package:levelup_test/app/di/app_scope.dart';
 import 'package:levelup_test/core/constants/channel_constants.dart';
 import 'package:levelup_test/core/integration/core_integration_coordinator.dart';
-import 'package:levelup_test/core/integration/pose_event_adapter.dart';
-import 'package:levelup_test/features/pose_detection/application/squat_counter.dart';
 import 'package:levelup_test/data/database/levelup_database.dart';
 import 'package:levelup_test/data/repositories/access_attempt_repository.dart';
 import 'package:levelup_test/data/repositories/workout_history_repository.dart';
@@ -33,16 +31,6 @@ import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../support/push_up_pose.dart';
-
-class _CountingSquatAdapter extends PoseEngineAdapter {
-  int frames = 0;
-
-  @override
-  SquatCounterResult processAngle(double? angle, {bool? isSimulated}) {
-    frames++;
-    return super.processAngle(angle, isSimulated: isSimulated);
-  }
-}
 
 class _LifecycleCamera extends CameraController {
   _LifecycleCamera(
@@ -569,15 +557,12 @@ void main() {
     test('five frontal push-ups through the camera controller grant access once', () async {
       List<Pose> poses = [];
       var timestamp = DateTime.now();
-      final unusedSquatAdapter = _CountingSquatAdapter();
-      addTearDown(unusedSquatAdapter.dispose);
       final controller = ProductionChallengeController(
         coordinator: scope.coordinator,
         cameraPermissionChecker: cameraChecker,
         nativeBridge: scope.nativeBridge,
         isUnlockChallenge: true,
         exerciseType: ExerciseType.pushUp,
-        poseAdapter: unusedSquatAdapter,
         availableCamerasOverride: () async => [],
         poseProcessorOverride: (_) async => poses,
         clock: () => timestamp,
@@ -607,7 +592,6 @@ void main() {
       await scope.coordinator.waitForCompletion();
       await Future<void>.delayed(Duration.zero);
       await feed(bottom);
-      expect(unusedSquatAdapter.frames, 0);
       expect(controller.repetitions, 5);
       expect(controller.isUnlockConfirmed, isTrue);
       expect(controller.grantedMinutes, 5);
@@ -736,13 +720,11 @@ void main() {
 
     test('a stale squat frame and disposal cannot affect the next push-up session', () async {
       final oldFrame = Completer<List<Pose>>();
-      final squatAdapter = _CountingSquatAdapter();
       final squatController = ProductionChallengeController(
         coordinator: scope.coordinator,
         cameraPermissionChecker: cameraChecker,
         nativeBridge: scope.nativeBridge,
         isUnlockChallenge: false,
-        poseAdapter: squatAdapter,
         availableCamerasOverride: () async => [],
         poseProcessorOverride: (_) => oldFrame.future,
       );
@@ -753,15 +735,12 @@ void main() {
 
       List<Pose> frame = [];
       var time = DateTime.utc(2026);
-      final unusedSquatAdapter = _CountingSquatAdapter();
-      addTearDown(unusedSquatAdapter.dispose);
       final pushController = ProductionChallengeController(
         coordinator: scope.coordinator,
         cameraPermissionChecker: cameraChecker,
         nativeBridge: scope.nativeBridge,
         isUnlockChallenge: false,
         exerciseType: ExerciseType.pushUp,
-        poseAdapter: unusedSquatAdapter,
         language: 'en',
         availableCamerasOverride: () async => [],
         poseProcessorOverride: (_) async => frame,
@@ -777,7 +756,6 @@ void main() {
       await inFlight;
       squatController.dispose();
       await Future<void>.delayed(Duration.zero);
-      expect(squatAdapter.frames, 0);
       expect(scope.coordinator.currentState.sessionId, currentSessionId);
       expect(pushController.repetitions, 0);
 
@@ -802,7 +780,6 @@ void main() {
       await feed(top);
       await feed(top);
       expect(pushController.repetitions, 1);
-      expect(unusedSquatAdapter.frames, 0);
       expect(grantCount, 0);
       await pushController.cancel();
     });

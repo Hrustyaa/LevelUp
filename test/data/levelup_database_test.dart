@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -5,6 +6,24 @@ import 'package:levelup_test/data/database/database_constants.dart';
 import 'package:levelup_test/data/database/levelup_database.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+class _ControlledDatabaseFactory implements DatabaseFactory {
+  final firstOpen = Completer<void>();
+  int opens = 0;
+  bool failFirstOpen = false;
+
+  @override
+  Future<Database> openDatabase(String path, {OpenDatabaseOptions? options}) async {
+    if (++opens == 1) {
+      await firstOpen.future;
+      if (failFirstOpen) throw StateError('Controlled SQLite open failure');
+    }
+    return databaseFactoryFfi.openDatabase(path, options: options);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
 
 void main() {
   setUpAll(() {
@@ -26,6 +45,39 @@ void main() {
   });
 
   group('LevelUpDatabase Lifecycle & Initialization', () {
+    test('concurrent open failures are shared and can be retried', () async {
+      final factory = _ControlledDatabaseFactory()..failFirstOpen = true;
+      final manager = LevelUpDatabase(databaseFactory: factory, customPath: dbPath);
+      addTearDown(manager.close);
+
+      final failures = [
+        expectLater(manager.database, throwsA(isA<Exception>())),
+        expectLater(manager.database, throwsA(isA<Exception>())),
+      ];
+      factory.firstOpen.complete();
+      await Future.wait(failures);
+      expect(factory.opens, 1);
+      expect(manager.isOpen, isFalse);
+      expect((await manager.database).isOpen, isTrue);
+      expect(factory.opens, 2);
+    });
+
+    test('closing during open releases the connection before any reopen', () async {
+      final factory = _ControlledDatabaseFactory();
+      final manager = LevelUpDatabase(databaseFactory: factory, customPath: dbPath);
+      addTearDown(manager.close);
+
+      final opening = manager.database;
+      final closing = manager.close();
+      factory.firstOpen.complete();
+      final first = await opening;
+      await closing;
+      expect(first.isOpen, isFalse);
+      expect(manager.isOpen, isFalse);
+      expect((await manager.database).isOpen, isTrue);
+      expect(factory.opens, 2);
+    });
+
     test('1. initializes database and creates schema tables and indices', () async {
       final dbManager = LevelUpDatabase(
         databaseFactory: databaseFactoryFfi,

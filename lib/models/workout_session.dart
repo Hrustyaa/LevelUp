@@ -85,7 +85,7 @@ class WorkoutSession {
   /// Throws [StateError] if session is not in [WorkoutSessionStatus.completed] status.
   WorkoutResult toWorkoutResult({
     String? source,
-    PushUpCompletion? pushUpCompletion,
+    CameraWorkoutCompletion? cameraCompletion,
   }) {
     if (status != WorkoutSessionStatus.completed) {
       throw StateError(
@@ -113,12 +113,12 @@ class WorkoutSession {
       accessDurationSeconds: isUnlock ? accessDurationSeconds : 0,
       earnedXp: resolvedSource == 'simulated' ||
               (exerciseType == ExerciseType.pushUp &&
-                  (pushUpCompletion == null ||
+                  (cameraCompletion == null ||
                       resolvedSource != PushUpVerification.verifiedSource))
           ? 0
           : xpReward,
       source: resolvedSource,
-      pushUpCompletion: pushUpCompletion,
+      cameraCompletion: cameraCompletion,
     );
   }
 

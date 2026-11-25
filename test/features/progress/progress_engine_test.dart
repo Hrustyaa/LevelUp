@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:levelup_test/app/di/app_scope.dart';
 import 'package:levelup_test/core/constants/channel_constants.dart';
 import 'package:levelup_test/core/errors/persistence_exceptions.dart';
 import 'package:levelup_test/core/integration/core_integration_coordinator.dart';
@@ -28,12 +30,15 @@ import 'package:levelup_test/features/progress/application/streak_calculator.dar
 import 'package:levelup_test/features/progress/application/xp_reward_policy.dart';
 import 'package:levelup_test/features/progress/data/progress_repository.dart';
 import 'package:levelup_test/features/progress/models/xp_reward_record.dart';
+import 'package:levelup_test/features/settings/application/camera_permission_checker.dart';
 import 'package:levelup_test/services/access_service.dart';
 import 'package:levelup_test/services/native_bridge.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../../support/push_up_pose.dart';
+
+import '../../support/verified_squat_frames.dart';
 
 DateTime _feedPushUps(PushUpPoseAdapter adapter, int reps, DateTime timestamp) {
   final top = plank();
@@ -320,9 +325,17 @@ void main() {
     late List<int> grantedMinutes;
     late Directory tempDir;
     late LevelUpDatabase db;
+    late bool nativeRequestAvailable;
+    late int claimCount;
+    Completer<void>? claimEntered;
+    Completer<void>? claimBarrier;
 
     setUp(() async {
       grantCount = 0;
+      nativeRequestAvailable = true;
+      claimCount = 0;
+      claimEntered = null;
+      claimBarrier = null;
       grantedMinutes = [];
       tempDir = await Directory.systemTemp.createTemp('levelup_coord_prog_');
       db = LevelUpDatabase(
@@ -340,7 +353,11 @@ void main() {
               ChannelConstants.keyServiceEnabled: true,
             };
           case ChannelConstants.methodConsumeChallengeRequest:
-            return true;
+            claimCount++;
+            claimEntered?.complete();
+            final barrier = claimBarrier;
+            if (barrier != null) await barrier.future;
+            return nativeRequestAvailable;
           case ChannelConstants.methodGrantAccess:
             grantCount++;
             final mins =
@@ -362,6 +379,108 @@ void main() {
       if (await tempDir.exists()) {
         await tempDir.delete(recursive: true);
       }
+    });
+
+    test('native workouts require a Gate claim and live camera evidence', () async {
+      final scope = AppScope.production(database: db,
+        cameraChecker: MockCameraPermissionChecker());
+      addTearDown(scope.dispose);
+      await scope.initialize();
+
+      nativeRequestAvailable = false;
+      await expectLater(
+        scope.coordinator.launchUnlockChallenge(),
+        throwsA(isA<InvalidChallengeRequestException>()),
+      );
+      expect(scope.coordinator.currentState.sessionId, isNull);
+      nativeRequestAvailable = true;
+      claimEntered = Completer<void>();
+      claimBarrier = Completer<void>();
+      final pending = scope.coordinator.launchUnlockChallenge();
+      await claimEntered!.future;
+
+      await expectLater(scope.coordinator.launchUnlockChallenge(), throwsA(isA<SessionAlreadyActiveException>()));
+      await expectLater(scope.coordinator.launchFreeWorkout(), throwsA(isA<SessionAlreadyActiveException>()));
+      claimBarrier!.complete();
+      final session = await pending;
+      expect(claimCount, 2);
+      expect(scope.coordinator.currentState.sessionId, session.sessionId);
+      await scope.coordinator.handlePoseResult(const SquatCounterResult(
+        phase: SquatPhase.up, repetitionCount: 5, isRepetitionCompleted: true,
+        isValidTracking: true, consecutiveDownFrames: 0, consecutiveUpFrames: 2,
+        feedbackMessage: 'Detached result',
+      ));
+      expect(scope.coordinator.currentState.verifiedRepetitions, 0);
+      await expectLater(scope.coordinator.completeCurrentSession(),
+        throwsA(isA<IneligibleWorkoutContextException>()));
+
+      final unbound = _makeWorkout(sessionId: 'unbound');
+      await expectLater(scope.accessService.grantAccessForCompletedWorkout(unbound),
+        throwsA(isA<IneligibleWorkoutContextException>()));
+      expect((await scope.progressService.recordCompletedWorkout(unbound)).awarded, isFalse);
+      await expectLater(scope.workoutHistoryRepository.saveCompletedWorkout(unbound),
+        throwsA(isA<InvalidWorkoutDataException>()));
+      expect(grantCount, 0);
+      expect(scope.progressService.currentState.totalXp, 0);
+
+      await completeVerifiedSquats(scope.coordinator);
+      expect(grantedMinutes, [5]);
+      expect(scope.progressService.currentState.totalXp, 50);
+    });
+
+    test('a malformed epoch is repaired without awarding older history', () async {
+      final now = DateTime(2026, 11, 25, 12);
+      final connection = await db.database;
+      await connection.insert(DatabaseConstants.tableAppSettings, {
+        DatabaseConstants.colSettingsKey: 'progress_epoch_ms',
+        DatabaseConstants.colSettingsValue: 'invalid',
+        DatabaseConstants.colSettingsUpdatedAt: now.millisecondsSinceEpoch,
+      });
+      final history = WorkoutHistoryRepository(databaseManager: db);
+      await history.saveCompletedWorkout(_makeWorkout(
+        sessionId: 'before-recovery',
+        completedAt: now.subtract(const Duration(days: 1)),
+      ));
+      final rewards = SqliteProgressRepository(databaseManager: db);
+      final progress = ProgressService(
+        repository: rewards, historyRepository: history, clock: () => now,
+      );
+      addTearDown(progress.dispose);
+      final state = await progress.initialize();
+      expect(state.errorMessage, isNull);
+      expect(state.totalXp, 0);
+      expect(await rewards.getOrCreateProgressEpochMs(0), now.millisecondsSinceEpoch);
+    });
+
+    test('XP recovery finds older missing rewards behind recent rewarded workouts', () async {
+      final history = WorkoutHistoryRepository(databaseManager: db);
+      final rewards = SqliteProgressRepository(databaseManager: db);
+      final now = DateTime(2026, 11, 25, 12);
+      final epoch = now.subtract(const Duration(days: 1));
+      await rewards.getOrCreateProgressEpochMs(epoch.millisecondsSinceEpoch);
+      await history.saveCompletedWorkout(_makeWorkout(
+        sessionId: 'older-missing', completedAt: now.subtract(const Duration(hours: 2)),
+      ));
+      for (var i = 0; i < 51; i++) {
+        final id = 'recent-$i';
+        await history.saveCompletedWorkout(_makeWorkout(sessionId: id, completedAt: now));
+        await rewards.recordRewardIfAbsent(XpRewardRecord(
+          sessionId: id, challengeId: 'squats_unlock_5',
+          challengeContext: ChallengeType.unlockChallenge, xpAmount: 50,
+          awardedAt: now, localDate: StreakCalculator.formatLocalDate(now),
+          verificationSource: 'camera',
+        ));
+      }
+      final progress = ProgressService(
+        repository: rewards, historyRepository: history, clock: () => now,
+      );
+      addTearDown(progress.dispose);
+      await progress.initialize();
+      expect(await rewards.getRewardBySessionId('older-missing'), isNotNull);
+      await progress.refresh();
+      expect(progress.currentState.totalXp, 2600);
+      expect(progress.currentState.completedWorkoutCount, 52);
+      expect(progress.currentState.recentRewards, hasLength(20));
     });
 
     test('6. Cancelled workout gives 0 XP; Free Workout gives 50 XP with 0 grantAccess; Unlock Challenge grants once and awards 50 XP', () async {
@@ -397,19 +516,7 @@ void main() {
 
       // B. Completed Free Workout -> 50 XP, 0 grantAccess
       await coordinator.launchFreeWorkout();
-      for (var rep = 1; rep <= 5; rep++) {
-        await coordinator.handlePoseResult(
-          SquatCounterResult(
-            phase: SquatPhase.up,
-            repetitionCount: rep,
-            isRepetitionCompleted: true,
-            isValidTracking: true,
-            consecutiveDownFrames: 0,
-            consecutiveUpFrames: 2,
-            feedbackMessage: 'Rep $rep',
-          ),
-        );
-      }
+      await completeVerifiedSquats(coordinator);
       await coordinator.waitForCompletion();
       expect(progressService.currentState.totalXp, 50);
       expect(grantCount, 0);
@@ -417,19 +524,7 @@ void main() {
 
       // C. Completed Unlock Challenge -> +50 XP (total 100, Level 2) & 1 grantAccess(5)
       await coordinator.launchUnlockChallenge(requirePendingRequest: true);
-      for (var rep = 1; rep <= 5; rep++) {
-        await coordinator.handlePoseResult(
-          SquatCounterResult(
-            phase: SquatPhase.up,
-            repetitionCount: rep,
-            isRepetitionCompleted: true,
-            isValidTracking: true,
-            consecutiveDownFrames: 0,
-            consecutiveUpFrames: 2,
-            feedbackMessage: 'Rep $rep',
-          ),
-        );
-      }
+      await completeVerifiedSquats(coordinator);
       await coordinator.waitForCompletion();
       expect(coordinator.currentState.sessionStatus, WorkoutSessionStatus.completed);
       expect(coordinator.currentState.accessGrantStatus, AccessGrantStatus.granted);
@@ -589,17 +684,8 @@ void main() {
       );
 
       now = DateTime(2026, 11, 25, 10);
-      final squat = await coordinator.launchFreeWorkout();
-      final squatAdapter = PoseEngineAdapter();
-      addTearDown(squatAdapter.dispose);
-      coordinator.attachPoseEventSource(squatAdapter, sessionId: squat.sessionId);
-      for (var rep = 0; rep < 5; rep++) {
-        for (final angle in [90.0, 90.0, 170.0, 170.0]) {
-          squatAdapter.processAngle(angle);
-        }
-      }
-      await Future<void>.delayed(Duration.zero);
-      await coordinator.waitForCompletion();
+      await coordinator.launchFreeWorkout();
+      await completeVerifiedSquats(coordinator);
       for (var i = 0; i < 2; i++) {
         final extra = await coordinator.launchFreeWorkout(exerciseType: ExerciseType.pushUp);
         await count(attach(extra), 5);
@@ -737,19 +823,7 @@ void main() {
       await coordinator.initialize();
 
       await coordinator.launchUnlockChallenge(requirePendingRequest: true);
-      for (var rep = 1; rep <= 5; rep++) {
-        await coordinator.handlePoseResult(
-          SquatCounterResult(
-            phase: SquatPhase.up,
-            repetitionCount: rep,
-            isRepetitionCompleted: true,
-            isValidTracking: true,
-            consecutiveDownFrames: 0,
-            consecutiveUpFrames: 2,
-            feedbackMessage: 'Rep $rep',
-          ),
-        );
-      }
+      await completeVerifiedSquats(coordinator);
       await coordinator.waitForCompletion();
 
       // Native access still succeeds once despite XP journal failure

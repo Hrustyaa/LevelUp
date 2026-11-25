@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 import 'dart:ui';
 
+import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
+
 /// Pure geometric functions for calculating biomechanical joint angles.
 ///
 /// Implements the exact 2D vector dot product formula used in the LevelUp prototype.
@@ -23,5 +25,43 @@ abstract final class SquatGeometry {
     final dotProduct = ab.dx * cb.dx + ab.dy * cb.dy;
     final cosine = (dotProduct / denominator).clamp(-1.0, 1.0);
     return math.acos(cosine) * 180 / math.pi;
+  }
+  /// Extracts the 2D interior knee angle using [SquatGeometry].
+  static double? estimateKneeAngle(Pose pose) {
+    final map = pose.landmarks;
+
+    double? side(
+      PoseLandmarkType hipType,
+      PoseLandmarkType kneeType,
+      PoseLandmarkType ankleType,
+    ) {
+      final hip = map[hipType];
+      final knee = map[kneeType];
+      final ankle = map[ankleType];
+      if (hip == null || knee == null || ankle == null) return null;
+      if ([hip, knee, ankle].any((point) =>
+          !point.likelihood.isFinite ||
+          point.likelihood < defaultLikelihoodThreshold ||
+          !point.x.isFinite || !point.y.isFinite)) {
+        return null;
+      }
+
+      return calculateKneeAngle(
+        Offset(hip.x, hip.y),
+        Offset(knee.x, knee.y),
+        Offset(ankle.x, ankle.y),
+      );
+    }
+
+    return side(
+          PoseLandmarkType.leftHip,
+          PoseLandmarkType.leftKnee,
+          PoseLandmarkType.leftAnkle,
+        ) ??
+        side(
+          PoseLandmarkType.rightHip,
+          PoseLandmarkType.rightKnee,
+          PoseLandmarkType.rightAnkle,
+        );
   }
 }

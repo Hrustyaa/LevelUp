@@ -72,20 +72,20 @@ class AccessService implements IAccessService {
 
   @override
   Future<AccessGrantResult> grantAccessForCompletedWorkout(WorkoutResult result) async {
-    if (_bridge is NativeBridge && result.source == 'simulated') {
+    final request = AccessGrantRequest.fromWorkoutResult(result);
+    if (_bridge is NativeBridge && !result.hasVerifiedCameraCompletion) {
       throw const IneligibleWorkoutContextException(
-        message: 'Simulated workouts cannot grant native access.',
+        message: 'Native access requires the session’s live camera completion.',
       );
     }
-    final request = AccessGrantRequest.fromWorkoutResult(result);
     return _requestAccess(request);
   }
 
   @override
   Future<AccessGrantResult> requestAccess(AccessGrantRequest request) async {
-    if (request.challengeId == ChallengeCatalog.pushUpUnlockId) {
+    if (_bridge is NativeBridge || request.challengeId == ChallengeCatalog.pushUpUnlockId) {
       throw const IneligibleWorkoutContextException(
-        message: 'Push-up access requires a completed workout result.',
+        message: 'Access requires a completed workout result.',
       );
     }
     return _requestAccess(request);
@@ -138,9 +138,13 @@ class AccessService implements IAccessService {
       }
 
       // 7. Invoke Native Bridge grantAccess
-      final unlockUntil = await _bridge.grantAccess(
-        minutes: request.durationMinutes,
-      );
+      final bridge = _bridge;
+      final unlockUntil = bridge is NativeBridge
+          ? await bridge.grantAccess(
+              minutes: request.durationMinutes,
+              expectedTarget: request.targetPackage,
+            )
+          : await bridge.grantAccess(minutes: request.durationMinutes);
 
       final grantResult = AccessGrantResult(
         sessionId: request.sessionId,
@@ -161,6 +165,11 @@ class AccessService implements IAccessService {
         cause: e,
       );
     } on NativeBridgeException catch (e) {
+      if (e.code == 'GATE_DENIED') {
+        throw const IneligibleWorkoutContextException(
+          message: 'The native Gate request is no longer eligible.',
+        );
+      }
       throw AccessEnginePlatformException(
         message: 'Bridge error during native grantAccess: ${e.message}',
         code: e.code,

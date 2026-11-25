@@ -13,7 +13,6 @@ import 'package:levelup_test/data/repositories/workout_history_repository.dart';
 import 'package:levelup_test/features/challenge/application/challenge_service.dart';
 import 'package:levelup_test/features/challenge/application/workout_session_manager.dart';
 import 'package:levelup_test/features/focus/application/focus_service.dart';
-import 'package:levelup_test/features/pose_detection/application/squat_counter.dart';
 import 'package:levelup_test/features/progress/application/progress_service.dart';
 import 'package:levelup_test/features/progress/data/progress_repository.dart';
 import 'package:levelup_test/features/progress/models/xp_reward_record.dart';
@@ -31,6 +30,8 @@ import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+import '../support/verified_squat_frames.dart';
 
 class _InMemoryWorkoutHistoryRepo implements IWorkoutHistoryRepository {
   final List<WorkoutResult> workouts = [];
@@ -286,19 +287,7 @@ void main() {
 
       // Complete 1st verified 5-squat Free Workout via coordinator
       await scope.coordinator.launchFreeWorkout();
-      for (var rep = 1; rep <= 5; rep++) {
-        await scope.coordinator.handlePoseResult(
-          SquatCounterResult(
-            phase: SquatPhase.up,
-            repetitionCount: rep,
-            isRepetitionCompleted: true,
-            isValidTracking: true,
-            consecutiveDownFrames: 0,
-            consecutiveUpFrames: 2,
-            feedbackMessage: 'Rep $rep',
-          ),
-        );
-      }
+      await completeVerifiedSquats(scope.coordinator);
       await scope.coordinator.waitForCompletion();
       scope.coordinator.releaseTerminalSession();
       await tester.pumpAndSettle();
@@ -317,19 +306,7 @@ void main() {
       // Complete 2nd verified 5-squat Unlock Challenge on SAME day -> 100 XP (Level 2), streak stays 1
       pendingChallenge = true;
       await scope.coordinator.launchUnlockChallenge(requirePendingRequest: true);
-      for (var rep = 1; rep <= 5; rep++) {
-        await scope.coordinator.handlePoseResult(
-          SquatCounterResult(
-            phase: SquatPhase.up,
-            repetitionCount: rep,
-            isRepetitionCompleted: true,
-            isValidTracking: true,
-            consecutiveDownFrames: 0,
-            consecutiveUpFrames: 2,
-            feedbackMessage: 'Rep $rep',
-          ),
-        );
-      }
+      await completeVerifiedSquats(scope.coordinator);
       await scope.coordinator.waitForCompletion();
       scope.coordinator.releaseTerminalSession();
       await tester.pumpAndSettle();
@@ -345,7 +322,7 @@ void main() {
       expect(find.text('+50 XP'), findsNWidgets(2));
 
       await tester.pumpWidget(const SizedBox());
-      scope.dispose();
+      await scope.dispose();
     });
 
     testWidgets('2. Pre-epoch historical workouts do not fabricate XP, untrusted preview is ignored, and post-epoch failed XP recovers on refresh', (tester) async {
@@ -424,7 +401,7 @@ void main() {
       expect(find.text('50 / 100 XP · 50 total XP'), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox());
-      scope.dispose();
+      await scope.dispose();
     });
 
     testWidgets('3. SQLite read failure shows honest error state instead of 0 XP, and disposal mid-refresh is safe', (tester) async {
@@ -466,7 +443,7 @@ void main() {
       completer.complete(const DashboardInsights(historyReady: true));
       await tester.pump();
 
-      scope.dispose();
+      await scope.dispose();
     });
 
     test('4. Progress persists in real SQLite across AppScope restart and surfaces in CoreInsightsAdapter', () async {
@@ -493,21 +470,9 @@ void main() {
 
       final scope1 = await bootSqlScope();
       await scope1.coordinator.launchFreeWorkout();
-      for (var rep = 1; rep <= 5; rep++) {
-        await scope1.coordinator.handlePoseResult(
-          SquatCounterResult(
-            phase: SquatPhase.up,
-            repetitionCount: rep,
-            isRepetitionCompleted: true,
-            isValidTracking: true,
-            consecutiveDownFrames: 0,
-            consecutiveUpFrames: 2,
-            feedbackMessage: 'Rep $rep',
-          ),
-        );
-      }
+      await completeVerifiedSquats(scope1.coordinator);
       await scope1.coordinator.waitForCompletion();
-      scope1.dispose();
+      await scope1.dispose();
 
       // Reopen fresh AppScope against same SQLite DB
       final scope2 = await bootSqlScope();
@@ -522,7 +487,7 @@ void main() {
       expect(insights.completedWorkoutCount, 1);
       expect(insights.events.single.xp, 50);
 
-      scope2.dispose();
+      await scope2.dispose();
     });
   });
 }

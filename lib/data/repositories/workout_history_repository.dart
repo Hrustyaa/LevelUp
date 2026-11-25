@@ -40,10 +40,12 @@ abstract class IWorkoutHistoryRepository {
 /// Production SQLite implementation of [IWorkoutHistoryRepository].
 class WorkoutHistoryRepository implements IWorkoutHistoryRepository {
   final LevelUpDatabase _dbManager;
+  final bool requireCameraEvidence;
 
   /// Creates a [WorkoutHistoryRepository] with dependency injection of [LevelUpDatabase].
   WorkoutHistoryRepository({
     LevelUpDatabase? databaseManager,
+    this.requireCameraEvidence = false,
   }) : _dbManager = databaseManager ?? LevelUpDatabase();
 
   @override
@@ -171,14 +173,42 @@ class WorkoutHistoryRepository implements IWorkoutHistoryRepository {
     return (result.first['total'] as num?)?.toInt() ?? 0;
   }
 
+  /// Loads eligible post-epoch records whose reward is missing from the ledger.
+  Future<List<WorkoutResult>> getUnrewardedCameraWorkouts(int epochMs) async {
+    final db = await _dbManager.database;
+    final rows = await db.rawQuery(
+      '''
+      SELECT workout.* FROM ${DatabaseConstants.tableWorkoutSessions} workout
+      WHERE ${DatabaseConstants.colCompletedAt} >= ?
+        AND length(trim(${DatabaseConstants.colSessionId})) > 0
+        AND ${DatabaseConstants.colCompletedRepetitions} >= 5
+        AND ((${DatabaseConstants.colExerciseType} = 'squats'
+              AND (${DatabaseConstants.colVerificationSource} IS NULL
+                   OR ${DatabaseConstants.colVerificationSource} = 'camera'))
+             OR (${DatabaseConstants.colExerciseType} = 'pushUp'
+                 AND ${DatabaseConstants.colCompletedRepetitions} = 5
+                 AND ${DatabaseConstants.colVerificationSource} = ?))
+        AND NOT EXISTS (
+          SELECT 1 FROM ${DatabaseConstants.tableXpRewards} reward
+          WHERE reward.${DatabaseConstants.colSessionId} = workout.${DatabaseConstants.colSessionId}
+        )
+      ORDER BY ${DatabaseConstants.colCompletedAt} ASC
+      LIMIT 50
+      ''',
+      [epochMs, PushUpVerification.verifiedSource],
+    );
+    return rows.map(_rowToWorkoutResult).toList(growable: false);
+  }
+
   void _validateWorkoutResult(WorkoutResult result) {
-    if (result.source.trim().toLowerCase() == PushUpVerification.verifiedSource &&
-        !result.hasVerifiedPushUpCompletion) {
+    final source = result.source.trim().toLowerCase();
+    if ((source == PushUpVerification.verifiedSource ||
+            (requireCameraEvidence && source == 'camera')) &&
+        !result.hasVerifiedCameraCompletion) {
       throw const InvalidWorkoutDataException(
-        'A verified push-up record requires its live camera completion.',
+        'A camera-verified record requires its live camera completion.',
       );
     }
-
     if (result.sessionId.trim().isEmpty) {
       throw const InvalidWorkoutDataException('sessionId must not be empty.');
     }

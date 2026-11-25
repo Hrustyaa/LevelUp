@@ -98,6 +98,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       _busy = false,
       _refreshing = false;
   int _generation = 0;
+  final Set<VoidCallback> _pendingReads = {};
   Timer? _ticker;
   StreamSubscription<ProgressState>? _progressSub;
   Object? _lastProgressSignature;
@@ -266,6 +267,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _ticker?.cancel();
+    _cancelPendingReads();
     _progressSub?.cancel();
     _statisticsSub?.cancel();
     _achievementSub?.cancel();
@@ -277,9 +279,41 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     super.dispose();
   }
 
+  void _cancelPendingReads() {
+    for (final cancel in _pendingReads.toList()) {
+      cancel();
+    }
+  }
+
+  Future<T> _readWithTimeout<T>(Future<T> Function() read) {
+    final result = Completer<T>();
+    void fail(Object error, [StackTrace? stack]) {
+      if (!result.isCompleted) result.completeError(error, stack);
+    }
+
+    final timer = Timer(
+      const Duration(seconds: 5),
+      () => fail(TimeoutException('Dashboard read timed out')),
+    );
+    void cancel() {
+      timer.cancel();
+      fail(StateError('Dashboard read superseded'));
+    }
+
+    _pendingReads.add(cancel);
+    unawaited(Future<T>.sync(read).then<void>((value) {
+      if (!result.isCompleted) result.complete(value);
+    }, onError: fail));
+    return result.future.whenComplete(() {
+      timer.cancel();
+      _pendingReads.remove(cancel);
+    });
+  }
+
   Future<void> _refresh({bool quiet = false}) async {
     final generation = ++_generation;
     if (!mounted) return;
+    _cancelPendingReads();
     _refreshing = true;
     if (!quiet) setState(() => _loading = true);
     FocusSnapshot? next;
@@ -291,9 +325,7 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
       await Future.wait<void>([
         () async {
           try {
-            next = await widget.gateway.read().timeout(
-              const Duration(seconds: 5),
-            );
+            next = await _readWithTimeout(widget.gateway.read);
           } catch (_) {
             focusError = true;
           }
@@ -301,16 +333,15 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
         () async {
           try {
             if (!quiet && widget.loadInsights != null) {
-              insights = await widget.loadInsights!().timeout(
-                const Duration(seconds: 5),
-              );
+              insights = await _readWithTimeout(widget.loadInsights!);
             }
           } catch (_) {
             insightsError = true;
           }
         }(),
       ]);
-      if (!quiet && widget.loadInsights != null && !insightsError) {
+      if (mounted && generation == _generation &&
+          !quiet && widget.loadInsights != null && !insightsError) {
         _lastProgressSignature = _signatureFromInsights(insights);
         if (insights.statistics != null) {
           _lastStatisticsSignature = _signatureFromStatistics(

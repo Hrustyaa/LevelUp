@@ -127,6 +127,11 @@ class SquatCounter {
   /// Resets the counter state back to initial (0 reps, up phase).
   void reset() {
     _reps = 0;
+    interruptTracking();
+  }
+
+  /// Discards the unfinished movement while retaining completed repetitions.
+  void interruptTracking() {
     _phase = SquatPhase.up;
     _consecutiveDown = 0;
     _consecutiveUp = 0;

@@ -10,6 +10,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    private val authorization = GateAuthorization()
     private val channelName = "levelup_test/control"
     private val prefs by lazy { getSharedPreferences("levelup_gate", Context.MODE_PRIVATE) }
     private val allowedTargets = setOf(
@@ -42,14 +43,24 @@ class MainActivity : FlutterActivity() {
                         if (target !in allowedTargets) {
                             result.error("TARGET", "Unsupported test package", null)
                         } else {
-                            prefs.edit().putString("target", target).putLong("unlock_until", 0L).apply()
-                            LevelUpAccessibilityService.instance?.reevaluate()
+                            if (target != currentTarget()) {
+                                authorization.clear()
+                                prefs.edit().putString("target", target)
+                                    .remove("open_challenge_target")
+                                    .putLong("unlock_until", 0L).apply()
+                                LevelUpAccessibilityService.instance?.reevaluate()
+                            }
                             result.success(true)
                         }
                     }
                     "setEnabled" -> {
                         val enabled = call.argument<Boolean>("enabled") ?: false
-                        prefs.edit().putBoolean("enabled", enabled).apply()
+                        val editor = prefs.edit().putBoolean("enabled", enabled)
+                        if (!enabled) {
+                            authorization.clear()
+                            editor.remove("open_challenge_target")
+                        }
+                        editor.apply()
                         LevelUpAccessibilityService.instance?.reevaluate()
                         result.success(true)
                     }
@@ -70,30 +81,47 @@ class MainActivity : FlutterActivity() {
                         result.success(if (granted) "granted" else "denied")
                     }
                     "consumeChallengeRequest" -> {
-                        val requested = prefs.getBoolean("open_challenge", false)
-                        prefs.edit().putBoolean("open_challenge", false).apply()
-                        result.success(requested)
+                        val requestedTarget = prefs.getString("open_challenge_target", null)
+                        prefs.edit().remove("open_challenge_target").apply()
+                        val target = currentTarget()
+                        result.success(
+                            authorization.claim(requestedTarget, target, isEligible(target))
+                        )
                     }
                     "grantAccess" -> {
+                        val target = currentTarget()
                         val startMs = System.currentTimeMillis()
-                        val minutes = (call.argument<Int>("minutes") ?: 5).coerceIn(1, 15)
-                        val unlockUntil = startMs + minutes * 60_000L
-                        prefs.edit().putLong("unlock_until", unlockUntil).apply()
-                        LevelUpAccessibilityService.instance?.reevaluate()
-                        android.util.Log.i("LevelUpGate", "GRANT_ACCESS startMs=$startMs unlockUntil=$unlockUntil durationMs=${unlockUntil - startMs} minutes=$minutes")
-                        result.success(unlockUntil)
-                        // Only attempts to return to one of the three user-selected apps.
-                        val target = prefs.getString("target", "com.google.android.youtube")
-                        if (target in allowedTargets) {
-                            val launch = packageManager.getLaunchIntentForPackage(target!!)
-                            if (launch != null) {
-                                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                startActivity(launch)
+                        val previousExpiry = prefs.getLong("unlock_until", 0L)
+                        val unlockUntil = authorization.takeGrant(
+                            expectedTarget = call.argument<String>("target"),
+                            currentTarget = target,
+                            eligible = isEligible(target),
+                            minutes = call.argument<Int>("minutes"),
+                            nowMs = startMs,
+                            unlockUntilMs = previousExpiry,
+                        )
+                        if (unlockUntil == null) {
+                            result.error("GATE_DENIED", "No eligible Gate claim", null)
+                        } else if (!prefs.edit().putLong("unlock_until", unlockUntil).commit()) {
+                            prefs.edit().putLong("unlock_until", previousExpiry).apply()
+                            result.error("GRANT_PERSIST_FAILED", "Could not store access", null)
+                        } else {
+                            LevelUpAccessibilityService.instance?.reevaluate()
+                            result.success(unlockUntil)
+                            try {
+                                packageManager.getLaunchIntentForPackage(target)?.let { launch ->
+                                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    startActivity(launch)
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.w("LevelUpGate", "Access granted; could not reopen target", e)
                             }
                         }
                     }
                     "resetAccess" -> {
-                        prefs.edit().putLong("unlock_until", 0L).apply()
+                        authorization.clear()
+                        prefs.edit().remove("open_challenge_target")
+                            .putLong("unlock_until", 0L).apply()
                         LevelUpAccessibilityService.instance?.reevaluate()
                         result.success(true)
                     }
@@ -101,6 +129,12 @@ class MainActivity : FlutterActivity() {
                 }
             }
     }
+
+    private fun currentTarget(): String =
+        prefs.getString("target", "com.google.android.youtube") ?: "com.google.android.youtube"
+
+    private fun isEligible(target: String): Boolean =
+        target in allowedTargets && prefs.getBoolean("enabled", false) && isServiceEnabled()
 
     private fun isServiceEnabled(): Boolean {
         val manager = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
