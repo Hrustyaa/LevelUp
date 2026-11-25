@@ -194,7 +194,8 @@ void main() {
     expect(find.byKey(const ValueKey('tab_4')), findsOneWidget);
     await t.tap(find.byKey(const ValueKey('tab_4')));
     await t.pumpAndSettle();
-    expect(find.text('Предпочтения'), findsOneWidget);
+    expect(find.text('ОБЩИЕ'), findsOneWidget);
+    expect(t.takeException(), isNull);
     await disposeHost(t);
   });
   testWidgets(

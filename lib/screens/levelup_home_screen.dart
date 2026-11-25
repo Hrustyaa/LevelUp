@@ -7,6 +7,7 @@ import 'package:material_ui/material_ui.dart';
 import '../data/dashboard_data.dart';
 import '../free_workout/workout_challenge_tab.dart';
 import '../progress/progress_tab.dart';
+import '../settings/settings_tab.dart';
 import 'levelup_focus_setup_screen.dart';
 
 const _bg = Color(0xFF0A0F10),
@@ -2369,73 +2370,22 @@ class _HomeState extends State<LevelUpHomeScreen> with WidgetsBindingObserver {
     ),
   ];
   List<Widget> _settings() => [
-    _title(tr('Preferences', 'Предпочтения', 'Қалаулар'), 26),
-    _gap(),
-    _card(
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _title(tr('Language', 'Язык', 'Тіл'), 16),
-          _gap(10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final l in DashboardLanguage.values)
-                ChoiceChip(
-                  label: Text(switch (l) {
-                    DashboardLanguage.en => 'English',
-                    DashboardLanguage.ru => 'Русский',
-                    DashboardLanguage.kk => 'Қазақша',
-                  }),
-                  selected: l == _language,
-                  showCheckmark: false,
-                  selectedColor: _lime,
-                  labelStyle: TextStyle(color: l == _language ? _bg : _ink),
-                  onSelected: (_) {
-                    setState(() => _language = l);
-                    widget.onLanguageChanged?.call(l);
-                  },
-                ),
-            ],
-          ),
-        ],
-      ),
-    ),
-    _gap(10),
-    _card(
-      Column(
-        children: [
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.shield_outlined, color: _muted),
-            title: Text(tr('Permissions', 'Разрешения', 'Рұқсаттар')),
-            trailing: const Icon(Icons.chevron_right, color: _muted),
-            enabled: widget.onPermissions != null,
-            onTap: widget.onPermissions == null
-                ? null
-                : () => _action(widget.onPermissions!),
-          ),
-          const Divider(height: 1),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.track_changes, color: _muted),
-            title: Text(
-              tr('Focus settings', 'Настройки фокуса', 'Фокус баптаулары'),
-            ),
-            trailing: const Icon(Icons.chevron_right, color: _muted),
-            onTap: () => _go(DashboardTab.focus),
-          ),
-        ],
-      ),
-    ),
-    _gap(10),
-    _note(
-      tr(
-        'Additional settings will appear when their features are connected.',
-        'Дополнительные настройки появятся после подключения функций.',
-        'Қосымша баптаулар функциялар қосылғанда пайда болады.',
-      ),
+    LevelUpSettingsTab(
+      language: _language,
+      onLanguageChanged: (next) {
+        setState(() => _language = next);
+        widget.onLanguageChanged?.call(next);
+      },
+      onManageApps: widget.onEditFocus == null
+          ? null
+          : () => _action(widget.onEditFocus!),
+      onFocusRules: () => _go(DashboardTab.focus),
+      onOpenPermissions: widget.onPermissions == null
+          ? null
+          : () => _action(widget.onPermissions!),
+      onOpenNotifications: widget.onNotifications == null
+          ? null
+          : () => _action(widget.onNotifications!),
     ),
   ];
   Widget _usageCard() => _card(
