@@ -7,6 +7,8 @@ import '../../data/repositories/workout_history_repository.dart';
 import '../../features/challenge/application/challenge_service.dart';
 import '../../features/challenge/application/workout_session_manager.dart';
 import '../../features/focus/application/focus_service.dart';
+import '../../features/progress/application/progress_service.dart';
+import '../../features/progress/data/progress_repository.dart';
 import '../../features/settings/application/camera_permission_checker.dart';
 import '../../features/settings/application/settings_service.dart';
 import '../../features/settings/data/settings_repository.dart';
@@ -31,6 +33,8 @@ class AppScope {
   final ISettingsService settingsService;
   final IWorkoutHistoryRepository workoutHistoryRepository;
   final IAccessAttemptRepository accessAttemptRepository;
+  late final IProgressRepository progressRepository;
+  late final IProgressService progressService;
   final IChallengeService challengeService;
   final IWorkoutSessionManager sessionManager;
   final IAccessService accessService;
@@ -56,6 +60,8 @@ class AppScope {
     required this.settingsService,
     required this.workoutHistoryRepository,
     required this.accessAttemptRepository,
+    IProgressRepository? progressRepository,
+    IProgressService? progressService,
     required this.challengeService,
     required this.sessionManager,
     required this.accessService,
@@ -65,6 +71,13 @@ class AppScope {
     CoreFocusGatewayAdapter? focusGateway,
     CoreInsightsAdapter? insightsAdapter,
   }) : appCatalog = appCatalog ?? const CoreAppCatalogAdapter() {
+    this.progressRepository =
+        progressRepository ?? SqliteProgressRepository(databaseManager: database);
+    this.progressService = progressService ??
+        ProgressService(
+          repository: this.progressRepository,
+          historyRepository: workoutHistoryRepository,
+        );
     this.permissionGateway = permissionGateway ??
         CorePermissionGatewayAdapter(
           settingsService: settingsService,
@@ -114,6 +127,14 @@ class AppScope {
     final accessRepo = AccessAttemptRepository(
       databaseManager: effectiveDb,
     );
+    final progressRepo = SqliteProgressRepository(
+      databaseManager: effectiveDb,
+    );
+    final progressService = ProgressService(
+      repository: progressRepo,
+      historyRepository: historyRepo,
+      clock: effectiveClock,
+    );
 
     final challengeService = ChallengeService();
     final sessionManager = WorkoutSessionManager(
@@ -133,6 +154,7 @@ class AppScope {
       accessService: accessService,
       workoutHistoryRepository: historyRepo,
       accessAttemptRepository: accessRepo,
+      progressService: progressService,
       clock: effectiveClock,
     );
 
@@ -145,6 +167,8 @@ class AppScope {
       settingsService: settingsService,
       workoutHistoryRepository: historyRepo,
       accessAttemptRepository: accessRepo,
+      progressRepository: progressRepo,
+      progressService: progressService,
       challengeService: challengeService,
       sessionManager: sessionManager,
       accessService: accessService,
@@ -168,7 +192,8 @@ class AppScope {
       }
       await focusService.refreshState();
 
-      // 3. Initialize Integration Coordinator
+      // 3. Initialize Integration Coordinator & Progress Engine
+      await progressService.initialize();
       await coordinator.initialize();
 
       _initialized = true;
@@ -183,12 +208,14 @@ class AppScope {
   Future<void> refresh() async {
     await settingsService.refresh();
     await focusService.refreshState();
+    await progressService.refresh();
   }
 
   /// Disposes resources held by the engines.
   void dispose() {
     coordinator.dispose();
     sessionManager.dispose();
+    progressService.dispose();
     settingsService.dispose();
     focusService.dispose();
     database.close();

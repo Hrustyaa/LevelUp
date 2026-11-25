@@ -141,7 +141,7 @@ void main() {
         customPath: dbPath,
       );
       final v2Db = await v2Manager.database;
-      expect(await v2Db.getVersion(), equals(2));
+      expect(await v2Db.getVersion(), equals(DatabaseConstants.currentSchemaVersion));
 
       // Step 3: Verify existing v1 workout data was completely preserved through migration
       final rows = await v2Db.query(
@@ -176,7 +176,7 @@ void main() {
         customPath: dbPath,
       );
       final reopenedDb = await v2Reopen.database;
-      expect(await reopenedDb.getVersion(), equals(2));
+      expect(await reopenedDb.getVersion(), equals(DatabaseConstants.currentSchemaVersion));
       final reopenedWorkouts = await reopenedDb.query(
         DatabaseConstants.tableWorkoutSessions,
         where: '${DatabaseConstants.colSessionId} = ?',
@@ -227,6 +227,78 @@ void main() {
       );
 
       await dbManager.close();
+    });
+
+    test('21. v2 to v3 migration preserves workouts, access attempts, and app_settings without fabricating XP', () async {
+      final v2Db = await databaseFactoryFfi.openDatabase(
+        dbPath,
+        options: OpenDatabaseOptions(
+          version: 2,
+          onCreate: (db, version) async {
+            final batch = db.batch();
+            batch.execute(DatabaseConstants.createTableWorkoutSessions);
+            batch.execute(DatabaseConstants.createIndexWorkoutSessionsCompletedAt);
+            batch.execute(DatabaseConstants.createTableAccessAttempts);
+            batch.execute(DatabaseConstants.createIndexAccessAttemptsAttemptedAt);
+            batch.execute(DatabaseConstants.createTableAppSettings);
+            await batch.commit(noResult: true);
+          },
+        ),
+      );
+
+      await v2Db.insert(DatabaseConstants.tableWorkoutSessions, {
+        DatabaseConstants.colSessionId: 'v2_workout_1',
+        DatabaseConstants.colChallengeId: 'squats_unlock_5',
+        DatabaseConstants.colChallengeContext: 'unlockChallenge',
+        DatabaseConstants.colExerciseType: 'squats',
+        DatabaseConstants.colTargetPackage: 'com.google.android.youtube',
+        DatabaseConstants.colCompletedRepetitions: 5,
+        DatabaseConstants.colDurationSeconds: 30,
+        DatabaseConstants.colCompletedAt: 1700000000000,
+      });
+      await v2Db.insert(DatabaseConstants.tableAccessAttempts, {
+        DatabaseConstants.colSessionId: 'v2_workout_1',
+        DatabaseConstants.colTargetPackage: 'com.google.android.youtube',
+        DatabaseConstants.colDurationSeconds: 300,
+        DatabaseConstants.colState: 'confirmed',
+        DatabaseConstants.colAttemptedAt: 1700000000000,
+        DatabaseConstants.colConfirmedAt: 1700000000500,
+        DatabaseConstants.colUnlockUntil: 1700000300500,
+      });
+      await v2Db.insert(DatabaseConstants.tableAppSettings, {
+        DatabaseConstants.colSettingsKey: 'app_settings',
+        DatabaseConstants.colSettingsValue: '{"sound_feedback_enabled": false}',
+        DatabaseConstants.colSettingsUpdatedAt: 1700000000000,
+      });
+      await v2Db.close();
+
+      final v3Manager = LevelUpDatabase(
+        databaseFactory: databaseFactoryFfi,
+        customPath: dbPath,
+      );
+      final v3Db = await v3Manager.database;
+      expect(await v3Db.getVersion(), equals(3));
+
+      expect(
+        (await v3Db.query(DatabaseConstants.tableWorkoutSessions)).length,
+        1,
+      );
+      expect(
+        (await v3Db.query(DatabaseConstants.tableAccessAttempts)).length,
+        1,
+      );
+      final settings = await v3Db.query(DatabaseConstants.tableAppSettings);
+      expect(settings.length, 1);
+      expect(
+        settings.first[DatabaseConstants.colSettingsValue],
+        '{"sound_feedback_enabled": false}',
+      );
+
+      // xp_rewards exists and does NOT fabricate historical XP on migration
+      final rewards = await v3Db.query(DatabaseConstants.tableXpRewards);
+      expect(rewards, isEmpty);
+
+      await v3Manager.close();
     });
   });
 }

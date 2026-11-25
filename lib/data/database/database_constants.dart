@@ -4,12 +4,13 @@ abstract final class DatabaseConstants {
   static const String databaseFileName = 'levelup.db';
 
   /// Current schema version.
-  static const int currentSchemaVersion = 2;
+  static const int currentSchemaVersion = 3;
 
   // Table names
   static const String tableWorkoutSessions = 'workout_sessions';
   static const String tableAccessAttempts = 'access_attempts';
   static const String tableAppSettings = 'app_settings';
+  static const String tableXpRewards = 'xp_rewards';
 
   // Columns: workout_sessions
   static const String colSessionId = 'session_id';
@@ -34,6 +35,11 @@ abstract final class DatabaseConstants {
   static const String colSettingsKey = 'key';
   static const String colSettingsValue = 'value';
   static const String colSettingsUpdatedAt = 'updated_at';
+
+  // Columns: xp_rewards
+  static const String colXpAmount = 'xp_amount';
+  static const String colAwardedAt = 'awarded_at';
+  static const String colLocalDate = 'local_date';
 
   // DDL statements
   static const String createTableWorkoutSessions = '''
@@ -80,5 +86,27 @@ abstract final class DatabaseConstants {
       $colSettingsValue TEXT NOT NULL,
       $colSettingsUpdatedAt INTEGER NOT NULL
     );
+  ''';
+
+  static const String createTableXpRewards = '''
+    CREATE TABLE IF NOT EXISTS $tableXpRewards (
+      $colSessionId TEXT PRIMARY KEY NOT NULL,
+      $colChallengeId TEXT NOT NULL,
+      $colChallengeContext TEXT NOT NULL CHECK($colChallengeContext IN ('unlockChallenge', 'freeWorkout')),
+      $colXpAmount INTEGER NOT NULL CHECK($colXpAmount > 0),
+      $colAwardedAt INTEGER NOT NULL,
+      $colLocalDate TEXT NOT NULL,
+      $colVerificationSource TEXT NOT NULL
+    );
+  ''';
+
+  static const String createIndexXpRewardsAwardedAt = '''
+    CREATE INDEX IF NOT EXISTS idx_xp_rewards_awarded_at
+    ON $tableXpRewards ($colAwardedAt DESC);
+  ''';
+
+  static const String createIndexXpRewardsLocalDate = '''
+    CREATE INDEX IF NOT EXISTS idx_xp_rewards_local_date
+    ON $tableXpRewards ($colLocalDate DESC);
   ''';
 }

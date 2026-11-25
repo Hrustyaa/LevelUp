@@ -7,6 +7,7 @@ import '../../features/challenge/application/challenge_service.dart';
 import '../../features/challenge/application/workout_session_manager.dart';
 import '../../features/focus/application/focus_service.dart';
 import '../../features/pose_detection/application/squat_counter.dart';
+import '../../features/progress/application/progress_service.dart';
 import '../../models/access_attempt_state.dart';
 import '../../models/native_permission_status.dart';
 import '../../services/access_service.dart';
@@ -81,6 +82,7 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
   final IAccessService _accessService;
   final IWorkoutHistoryRepository _workoutHistoryRepository;
   final IAccessAttemptRepository _accessAttemptRepository;
+  final IProgressService? _progressService;
   final DateTime Function() _clock;
 
   final StreamController<CoordinatorState> _stateController =
@@ -100,6 +102,7 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
     required IAccessService accessService,
     required IWorkoutHistoryRepository workoutHistoryRepository,
     required IAccessAttemptRepository accessAttemptRepository,
+    IProgressService? progressService,
     DateTime Function()? clock,
   })  : _nativeBridge = nativeBridge,
         _focusService = focusService,
@@ -108,6 +111,7 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
         _accessService = accessService,
         _workoutHistoryRepository = workoutHistoryRepository,
         _accessAttemptRepository = accessAttemptRepository,
+        _progressService = progressService,
         _clock = clock ?? DateTime.now;
 
   @override
@@ -455,6 +459,15 @@ class CoreIntegrationCoordinator implements ICoreIntegrationCoordinator {
       // 2. Persist completed workout result in SQLite
       await _workoutHistoryRepository.saveCompletedWorkout(workoutResult);
       _emitState(_currentState.copyWith(isWorkoutPersisted: true));
+
+      // 2b. Record motivational XP reward (isolated from access grant authorization)
+      if (_progressService != null) {
+        try {
+          await _progressService.recordCompletedWorkout(workoutResult);
+        } catch (_) {
+          // XP reward errors must never abort or duplicate unlock authorization.
+        }
+      }
 
       // 3. Free workout never issues access
       if (session.challengeContext == ChallengeType.freeWorkout) {

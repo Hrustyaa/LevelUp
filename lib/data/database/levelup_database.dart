@@ -97,6 +97,9 @@ class LevelUpDatabase {
     batch.execute(DatabaseConstants.createTableAccessAttempts);
     batch.execute(DatabaseConstants.createIndexAccessAttemptsAttemptedAt);
     batch.execute(DatabaseConstants.createTableAppSettings);
+    batch.execute(DatabaseConstants.createTableXpRewards);
+    batch.execute(DatabaseConstants.createIndexXpRewardsAwardedAt);
+    batch.execute(DatabaseConstants.createIndexXpRewardsLocalDate);
     await batch.commit(noResult: true);
   }
 
@@ -105,12 +108,18 @@ class LevelUpDatabase {
       // Incremental non-destructive migrations.
       // Version 1: baseline schema (workout_sessions, access_attempts).
       // Version 2: adds app_settings key-value store (Module 08).
+      // Version 3: adds xp_rewards durable journal (Module 09A).
       if (oldVersion < 1) {
         await _onCreate(db, newVersion);
         return;
       }
       if (oldVersion < 2) {
         await db.execute(DatabaseConstants.createTableAppSettings);
+      }
+      if (oldVersion < 3) {
+        await db.execute(DatabaseConstants.createTableXpRewards);
+        await db.execute(DatabaseConstants.createIndexXpRewardsAwardedAt);
+        await db.execute(DatabaseConstants.createIndexXpRewardsLocalDate);
       }
     } catch (e) {
       throw DatabaseMigrationException(
