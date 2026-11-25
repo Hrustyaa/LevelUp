@@ -277,7 +277,10 @@ void main() {
         customPath: dbPath,
       );
       final v3Db = await v3Manager.database;
-      expect(await v3Db.getVersion(), equals(3));
+      expect(
+        await v3Db.getVersion(),
+        equals(DatabaseConstants.currentSchemaVersion),
+      );
 
       expect(
         (await v3Db.query(DatabaseConstants.tableWorkoutSessions)).length,
@@ -299,6 +302,81 @@ void main() {
       expect(rewards, isEmpty);
 
       await v3Manager.close();
+    });
+
+    test('22. v3 to v4 migration preserves workouts, access attempts, app_settings, progress_epoch_ms, and xp_rewards', () async {
+      final v3Db = await databaseFactoryFfi.openDatabase(
+        dbPath,
+        options: OpenDatabaseOptions(
+          version: 3,
+          onCreate: (db, version) async {
+            final batch = db.batch();
+            batch.execute(DatabaseConstants.createTableWorkoutSessions);
+            batch.execute(DatabaseConstants.createIndexWorkoutSessionsCompletedAt);
+            batch.execute(DatabaseConstants.createTableAccessAttempts);
+            batch.execute(DatabaseConstants.createIndexAccessAttemptsAttemptedAt);
+            batch.execute(DatabaseConstants.createTableAppSettings);
+            batch.execute(DatabaseConstants.createTableXpRewards);
+            batch.execute(DatabaseConstants.createIndexXpRewardsAwardedAt);
+            batch.execute(DatabaseConstants.createIndexXpRewardsLocalDate);
+            await batch.commit(noResult: true);
+          },
+        ),
+      );
+
+      await v3Db.insert(DatabaseConstants.tableWorkoutSessions, {
+        DatabaseConstants.colSessionId: 'v3_workout_1',
+        DatabaseConstants.colChallengeId: 'squats_unlock_5',
+        DatabaseConstants.colChallengeContext: 'unlockChallenge',
+        DatabaseConstants.colExerciseType: 'squats',
+        DatabaseConstants.colTargetPackage: 'com.google.android.youtube',
+        DatabaseConstants.colCompletedRepetitions: 5,
+        DatabaseConstants.colDurationSeconds: 30,
+        DatabaseConstants.colCompletedAt: 1700000000000,
+      });
+      await v3Db.insert(DatabaseConstants.tableAppSettings, {
+        DatabaseConstants.colSettingsKey: 'progress_epoch_ms',
+        DatabaseConstants.colSettingsValue: '1700000000000',
+        DatabaseConstants.colSettingsUpdatedAt: 1700000000000,
+      });
+      await v3Db.insert(DatabaseConstants.tableXpRewards, {
+        DatabaseConstants.colSessionId: 'v3_workout_1',
+        DatabaseConstants.colChallengeId: 'squats_unlock_5',
+        DatabaseConstants.colChallengeContext: 'unlockChallenge',
+        DatabaseConstants.colXpAmount: 50,
+        DatabaseConstants.colAwardedAt: 1700000000000,
+        DatabaseConstants.colLocalDate: '2023-11-14',
+        DatabaseConstants.colVerificationSource: 'camera',
+      });
+      await v3Db.close();
+
+      final v4Manager = LevelUpDatabase(
+        databaseFactory: databaseFactoryFfi,
+        customPath: dbPath,
+      );
+      final v4Db = await v4Manager.database;
+      expect(await v4Db.getVersion(), equals(4));
+
+      expect(
+        (await v4Db.query(DatabaseConstants.tableWorkoutSessions)).length,
+        1,
+      );
+      expect(
+        (await v4Db.query(DatabaseConstants.tableXpRewards)).length,
+        1,
+      );
+      final epochRows = await v4Db.query(
+        DatabaseConstants.tableAppSettings,
+        where: '${DatabaseConstants.colSettingsKey} = ?',
+        whereArgs: ['progress_epoch_ms'],
+      );
+      expect(epochRows.length, 1);
+      expect(epochRows.first[DatabaseConstants.colSettingsValue], '1700000000000');
+
+      final achievements = await v4Db.query(DatabaseConstants.tableAchievements);
+      expect(achievements, isEmpty);
+
+      await v4Manager.close();
     });
   });
 }

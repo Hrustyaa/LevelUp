@@ -4,13 +4,14 @@ abstract final class DatabaseConstants {
   static const String databaseFileName = 'levelup.db';
 
   /// Current schema version.
-  static const int currentSchemaVersion = 3;
+  static const int currentSchemaVersion = 4;
 
   // Table names
   static const String tableWorkoutSessions = 'workout_sessions';
   static const String tableAccessAttempts = 'access_attempts';
   static const String tableAppSettings = 'app_settings';
   static const String tableXpRewards = 'xp_rewards';
+  static const String tableAchievements = 'achievements';
 
   // Columns: workout_sessions
   static const String colSessionId = 'session_id';
@@ -40,6 +41,13 @@ abstract final class DatabaseConstants {
   static const String colXpAmount = 'xp_amount';
   static const String colAwardedAt = 'awarded_at';
   static const String colLocalDate = 'local_date';
+
+  // Columns: achievements
+  static const String colAchievementId = 'achievement_id';
+  static const String colUnlockedAt = 'unlocked_at';
+  static const String colCategory = 'category';
+  static const String colTargetValue = 'target_value';
+  static const String colObservedValue = 'observed_value';
 
   // DDL statements
   static const String createTableWorkoutSessions = '''
@@ -108,5 +116,20 @@ abstract final class DatabaseConstants {
   static const String createIndexXpRewardsLocalDate = '''
     CREATE INDEX IF NOT EXISTS idx_xp_rewards_local_date
     ON $tableXpRewards ($colLocalDate DESC);
+  ''';
+
+  static const String createTableAchievements = '''
+    CREATE TABLE IF NOT EXISTS $tableAchievements (
+      $colAchievementId TEXT PRIMARY KEY NOT NULL,
+      $colUnlockedAt INTEGER NOT NULL,
+      $colCategory TEXT NOT NULL,
+      $colTargetValue INTEGER NOT NULL CHECK($colTargetValue > 0),
+      $colObservedValue INTEGER NOT NULL CHECK($colObservedValue >= 0)
+    );
+  ''';
+
+  static const String createIndexAchievementsUnlockedAt = '''
+    CREATE INDEX IF NOT EXISTS idx_achievements_unlocked_at
+    ON $tableAchievements ($colUnlockedAt DESC);
   ''';
 }

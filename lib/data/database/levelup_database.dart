@@ -100,6 +100,8 @@ class LevelUpDatabase {
     batch.execute(DatabaseConstants.createTableXpRewards);
     batch.execute(DatabaseConstants.createIndexXpRewardsAwardedAt);
     batch.execute(DatabaseConstants.createIndexXpRewardsLocalDate);
+    batch.execute(DatabaseConstants.createTableAchievements);
+    batch.execute(DatabaseConstants.createIndexAchievementsUnlockedAt);
     await batch.commit(noResult: true);
   }
 
@@ -120,6 +122,10 @@ class LevelUpDatabase {
         await db.execute(DatabaseConstants.createTableXpRewards);
         await db.execute(DatabaseConstants.createIndexXpRewardsAwardedAt);
         await db.execute(DatabaseConstants.createIndexXpRewardsLocalDate);
+      }
+      if (oldVersion < 4) {
+        await db.execute(DatabaseConstants.createTableAchievements);
+        await db.execute(DatabaseConstants.createIndexAchievementsUnlockedAt);
       }
     } catch (e) {
       throw DatabaseMigrationException(

@@ -4,6 +4,8 @@ import '../../core/integration/core_integration_coordinator.dart';
 import '../../data/database/levelup_database.dart';
 import '../../data/repositories/access_attempt_repository.dart';
 import '../../data/repositories/workout_history_repository.dart';
+import '../../features/achievements/application/achievement_service.dart';
+import '../../features/achievements/data/achievement_repository.dart';
 import '../../features/challenge/application/challenge_service.dart';
 import '../../features/challenge/application/workout_session_manager.dart';
 import '../../features/focus/application/focus_service.dart';
@@ -39,6 +41,8 @@ class AppScope {
   late final IProgressService progressService;
   late final IStatisticsRepository statisticsRepository;
   late final IStatisticsService statisticsService;
+  late final IAchievementRepository achievementRepository;
+  late final IAchievementService achievementService;
   final IChallengeService challengeService;
   final IWorkoutSessionManager sessionManager;
   final IAccessService accessService;
@@ -68,6 +72,8 @@ class AppScope {
     IProgressService? progressService,
     IStatisticsRepository? statisticsRepository,
     IStatisticsService? statisticsService,
+    IAchievementRepository? achievementRepository,
+    IAchievementService? achievementService,
     required this.challengeService,
     required this.sessionManager,
     required this.accessService,
@@ -91,6 +97,14 @@ class AppScope {
           repository: this.statisticsRepository,
           progressService: this.progressService,
           focusService: focusService,
+        );
+    this.achievementRepository =
+        achievementRepository ?? SqliteAchievementRepository(databaseManager: database);
+    this.achievementService = achievementService ??
+        AchievementService(
+          repository: this.achievementRepository,
+          statisticsService: this.statisticsService,
+          progressService: this.progressService,
         );
     this.permissionGateway = permissionGateway ??
         CorePermissionGatewayAdapter(
@@ -160,6 +174,15 @@ class AppScope {
       focusService: focusService,
       clock: effectiveClock,
     );
+    final achievementRepo = SqliteAchievementRepository(
+      databaseManager: effectiveDb,
+    );
+    final achievementService = AchievementService(
+      repository: achievementRepo,
+      statisticsService: statisticsService,
+      progressService: progressService,
+      clock: effectiveClock,
+    );
 
     final challengeService = ChallengeService();
     final sessionManager = WorkoutSessionManager(
@@ -196,6 +219,8 @@ class AppScope {
       progressService: progressService,
       statisticsRepository: statisticsRepo,
       statisticsService: statisticsService,
+      achievementRepository: achievementRepo,
+      achievementService: achievementService,
       challengeService: challengeService,
       sessionManager: sessionManager,
       accessService: accessService,
@@ -219,9 +244,10 @@ class AppScope {
       }
       await focusService.refreshState();
 
-      // 3. Initialize Integration Coordinator, Progress & Statistics Engines
+      // 3. Initialize Integration Coordinator, Progress, Statistics & Achievements Engines
       await progressService.initialize();
       await statisticsService.initialize();
+      await achievementService.initialize();
       await coordinator.initialize();
 
       _initialized = true;
@@ -238,12 +264,14 @@ class AppScope {
     await focusService.refreshState();
     await progressService.refresh();
     await statisticsService.refresh();
+    await achievementService.evaluateAndRefresh();
   }
 
   /// Disposes resources held by the engines.
   void dispose() {
     coordinator.dispose();
     sessionManager.dispose();
+    achievementService.dispose();
     statisticsService.dispose();
     progressService.dispose();
     settingsService.dispose();
